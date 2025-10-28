@@ -1,0 +1,1407 @@
+<script setup>
+// --- 1. 导入依赖 ---
+import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import draggable from 'vuedraggable'
+
+// --- 2. 静态配置数据 ---
+
+/**
+ * @description 预设服务器标签
+ */
+const presets = {
+  "mod": { tag: "模组", tag_color_with_hash: "#E67E22" },
+  "survival": { tag: "生存", tag_color_with_hash: "#2ECC71" },
+  "creative": { tag: "创造", tag_color_with_hash: "#F1C40F" },
+  "lobby": { tag: "大厅", tag_color_with_hash: "#3498DB" },
+  "proxy": { tag: "代理服", tag_color_with_hash: "#8E44AD" }
+}
+
+/**
+ * @description (v16 重构) serverTypes 和 labels 仅用于显示
+ */
+const serverTypeLabels = {
+  standalone: '独立服务器',
+  parent: '父服务器',
+  child: '子服务器'
+}
+
+// (v16 建议 5) 移除 defaultJsonString
+
+// --- 3. 核心响应式状态 ---
+
+const config = ref({
+  footer: "",
+  servers: []
+})
+
+const serverTree = ref([])
+
+const jsonInput = ref(``)
+
+// --- 4. 模态弹窗状态 ---
+
+// --- (A) 通用 Alert/Confirm 弹窗 ---
+const isModalVisible = ref(false)
+const modalTitle = ref('')
+const modalMessage = ref('')
+const modalType = ref('alert')
+const modalResolve = ref(null)
+
+// --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗状态 ---
+const isServerModalVisible = ref(false) // 控制新弹窗的显示与隐藏
+const modalMode = ref('add')              // 'add' 或 'edit'
+const currentServerData = ref(null)     // 存储正在添加/编辑的服务器数据 (副本)
+const editingServerIp = ref(null)       // 存储*原始*IP，用于编辑时的唯一性检查
+let cancelModalTimeout = null           // 统一的弹窗清理句柄
+
+// --- 5. 计算属性 (Computed Properties) ---
+
+/**
+ * @description 计算出所有可以作为“父服务器”的服务器。
+ */
+const potentialParentServers = computed(() => {
+  if (!config.value.servers) return []
+  return config.value.servers.filter(s => s.server_type === 'parent' || s.server_type === 'standalone')
+})
+
+/**
+ * @description 计算出最终用于“导出”的 JSON 字符串。
+ */
+const outputJson = computed(() => {
+  const cleanConfig = JSON.parse(JSON.stringify(config.value))
+  if (cleanConfig.servers) {
+    cleanConfig.servers.forEach(server => {
+      delete server.tag_color_with_hash
+      delete server.selectedPreset
+    })
+  }
+  return JSON.stringify(cleanConfig, null, 2)
+})
+
+// --- 6. 方法 (Methods) ---
+
+// --- (A) 通用 Alert/Confirm 弹窗方法 ---
+
+function showAlert(message, title = '提示') {
+  modalTitle.value = title
+  modalMessage.value = message
+  modalType.value = 'alert'
+  isModalVisible.value = true
+}
+
+function showConfirm(message, title = '请确认') {
+  modalTitle.value = title
+  modalMessage.value = message
+  modalType.value = 'confirm'
+  isModalVisible.value = true
+  return new Promise((resolve) => {
+    modalResolve.value = resolve
+  })
+}
+
+function onModalConfirm() {
+  isModalVisible.value = false
+  if (modalResolve.value) {
+    modalResolve.value(true)
+  }
+  modalResolve.value = null
+}
+
+function onModalCancel() {
+  isModalVisible.value = false
+  if (modalResolve.value) {
+    modalResolve.value(false)
+  }
+  modalResolve.value = null
+}
+
+// --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗方法 ---
+
+/**
+ * @description 创建一个用于“添加”弹窗的空白服务器对象。
+ * @param {object | null} parentServer - 如果是添加子服，传入父服对象
+ * @returns {object} 一个新的服务器数据对象。
+ */
+function createBlankServer(parentServer = null) {
+  return {
+    ip: "",
+    comment: "",
+    tag: "",
+    tag_color: "333333",
+    tag_color_with_hash: "#333333",
+    server_type: "standalone", // 默认为 standalone
+    parent_ip: parentServer ? parentServer.ip : "", // (v16) 预设 parent_ip
+    selectedPreset: "",
+    ignore_in_list: false,
+  }
+}
+
+/**
+ * @description (v16) 打开服务器弹窗（添加或编辑模式）
+ * @param {object | null} [serverToEdit=null] - 要编辑的服务器对象。如果为 null，则为添加模式。
+ * @param {object | null} [parentServer=null] - (仅添加模式) 如果要添加子服，传入父服。
+ */
+async function openServerModal(serverToEdit = null, parentServer = null) {
+  // 1. (竞争条件修复) 清除任何待处理的关闭超时
+  if (cancelModalTimeout) {
+    clearTimeout(cancelModalTimeout)
+    cancelModalTimeout = null
+  }
+
+  // 2. 先清空数据 (确保 v-if 触发)
+  currentServerData.value = null
+
+  if (serverToEdit) {
+    // --- 编辑模式 ---
+    modalMode.value = 'edit'
+    // 存储原始 IP 用于验证
+    editingServerIp.value = serverToEdit.ip
+    // 填充数据为 *深拷贝*
+    await nextTick() // 等待 v-if=null 生效
+    currentServerData.value = JSON.parse(JSON.stringify(serverToEdit))
+  } else {
+    // --- 添加模式 ---
+    modalMode.value = 'add'
+    editingServerIp.value = null
+    // 填充数据为空白对象
+    await nextTick() // 等待 v-if=null 生效
+    currentServerData.value = createBlankServer(parentServer)
+  }
+
+  // 3. 显示弹窗
+  isServerModalVisible.value = true
+}
+
+/**
+ * @description (v16) 关闭服务器弹窗
+ */
+function closeServerModal() {
+  isServerModalVisible.value = false
+
+  if (cancelModalTimeout) {
+    clearTimeout(cancelModalTimeout)
+  }
+
+  // 启动超时清理
+  cancelModalTimeout = setTimeout(() => {
+    currentServerData.value = null
+    editingServerIp.value = null
+    cancelModalTimeout = null
+  }, 300)
+}
+
+/**
+ * @description (v16) 保存“添加”或“编辑”的服务器
+ */
+function saveServer() {
+  if (!currentServerData.value) return;
+
+  const server = currentServerData.value;
+  const newIp = (server.ip || "").trim();
+
+  // 验证1: 检查 IP 是否为空
+  if (newIp === '') {
+    showAlert('服务器地址 (IP) 不能为空！', '保存失败');
+    return;
+  }
+
+  // 验证2: 检查 IP 唯一性
+  // 仅当 (IP 发生变化) 或 (这是新添加的服务器) 时才检查
+  if (newIp !== editingServerIp.value) {
+    const isDuplicate = config.value.servers.some(s => s.ip === newIp);
+    if (isDuplicate) {
+      showAlert(`服务器地址 (IP) "${newIp}" 已存在！\n请使用唯一的 IP 地址。`, '保存失败');
+      return;
+    }
+  }
+
+  server.ip = newIp
+
+  // (v16) 核心逻辑：根据 parent_ip 自动设置 server_type
+  if (server.parent_ip) {
+    server.server_type = 'child'
+
+    // 自动转换父服
+    const parent = config.value.servers.find(s => s.ip === server.parent_ip)
+    if (parent && parent.server_type === 'standalone') {
+      parent.server_type = 'parent'
+    }
+  } else {
+    // 如果没有 parent_ip，它就是 standalone
+    // （注意：如果它有子服，flattenTreeAndSync 会自动将其设为 parent，这里不用管）
+    server.server_type = 'standalone'
+  }
+
+  // 应用更改
+  if (modalMode.value === 'edit') {
+    // --- 编辑模式 ---
+    // 找到原始服务器对象
+    const originalServer = config.value.servers.find(s => s.ip === editingServerIp.value);
+    if (originalServer) {
+      // 将副本数据覆盖回去
+      Object.assign(originalServer, server)
+    }
+  } else {
+    // --- 添加模式 ---
+    // (v14) 核心简化：只需推入扁平列表
+    config.value.servers.push(server)
+  }
+
+  closeServerModal() // 关闭弹窗并清理
+}
+
+
+// --- (C) 辅助函数 (Helpers) ---
+
+function getContrastColor(hexColor) {
+  if (!hexColor || hexColor.length < 7) return '#000000';
+  const r = parseInt(hexColor.substr(1, 2), 16);
+  const g = parseInt(hexColor.substr(3, 2), 16);
+  const b = parseInt(hexColor.substr(5, 2), 16);
+  const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+  return (yiq >= 128) ? '#000000' : '#FFFFFF';
+}
+
+function sanitizeIpForId(ip) {
+  if (!ip) return 'new-server';
+  return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+/**
+ * @description (v14) 核心重构：将扁平的服务器列表转换为嵌套树形结构。
+ */
+function buildTree(flatList) {
+  const map = {}
+  const serversWithChildren = flatList
+      .map(server => {
+        const serverCopy = { ...server, children: [] }
+        map[serverCopy.ip] = serverCopy
+        return serverCopy
+      })
+
+  const tree = []
+
+  serversWithChildren.forEach(server => {
+    if (server.parent_ip) {
+      const parent = map[server.parent_ip]
+      if (parent) {
+        server.server_type = 'child'
+        parent.children.push(server)
+      } else {
+        // 孤儿节点
+        server.parent_ip = ''
+        server.server_type = 'standalone'
+        tree.push(server)
+      }
+    } else {
+      // 根节点
+      tree.push(server)
+    }
+  })
+
+  return tree
+}
+
+
+// --- (D) 核心逻辑 (Core Logic) ---
+
+/**
+ * @description 解析 JSON 字符串并设置到 `config` 状态中。
+ */
+function parseAndSetConfig(jsonString) {
+  try {
+    const data = JSON.parse(jsonString)
+    if (data.servers && Array.isArray(data.servers)) {
+      const ipSet = new Set();
+      const duplicates = [];
+
+      data.servers.forEach((s) => {
+        if (ipSet.has(s.ip)) {
+          duplicates.push(s.ip);
+        }
+        ipSet.add(s.ip);
+
+        // 补全 UI 辅助属性
+        s.tag_color_with_hash = (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888'
+        s.selectedPreset = ""
+        s.parent_ip = s.parent_ip || ""
+        s.ignore_in_list = s.ignore_in_list || false
+        s.comment = s.comment || ""
+      })
+
+      if (duplicates.length > 0) {
+        throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
+      }
+
+      data.servers.sort((a, b) => a.priority - b.priority)
+    } else {
+      data.servers = []
+    }
+    config.value = data
+  } catch (e) {
+    showAlert(e.message, "导入失败")
+  }
+}
+
+/**
+ * @description “加载配置”按钮的点击事件处理器。
+ */
+function loadConfig() {
+  parseAndSetConfig(jsonInput.value)
+}
+
+/**
+ * @description (v14) 拖拽结束后，重建 `config.value.servers`。
+ */
+function flattenTreeAndSync() {
+  const newFlatList = []
+  let priorityCounter = 0
+
+  function traverse(nodes, parentIp = "") {
+    if (!nodes) return
+
+    nodes.forEach((server) => {
+      server.parent_ip = parentIp
+
+      if (parentIp) {
+        server.server_type = 'child'
+      } else if (server.children.length > 0) {
+        server.server_type = 'parent'
+      } else {
+        server.server_type = 'standalone'
+      }
+
+      server.priority = (priorityCounter + 1) * 10
+      priorityCounter++
+
+      const { children, ...flatServer } = server
+      newFlatList.push(flatServer)
+
+      traverse(children, server.ip)
+    })
+  }
+
+  traverse(serverTree.value, "")
+
+  // 临时禁用 watch，更新，然后再启用
+  stopWatch()
+  config.value.servers = newFlatList
+  nextTick(() => {
+    startWatch()
+  })
+}
+
+/**
+ * @description (v15) 拖拽规则。
+ */
+function checkMove(moveEvent) {
+  const draggedEl = moveEvent.draggedContext.element
+  const toEl = moveEvent.to
+
+  // 检查被拖拽的元素是否是一个 "父服" (有子节点)
+  if (
+      draggedEl &&
+      draggedEl.children &&
+      draggedEl.children.length > 0
+  ) {
+    // 检查目标列表是否是一个 "子列表"
+    if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
+      // 阻止移动 (父服不能成为子服)
+      return false
+    }
+  }
+  return true
+}
+
+// --- (E) 弹窗内的表单逻辑 (颜色与预设) ---
+
+function updateColorFromPicker(server) {
+  server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
+}
+
+function applyPreset(server) {
+  const presetKey = server.selectedPreset
+  if (!presetKey || !presets[presetKey]) return
+
+  const preset = presets[presetKey]
+  server.tag = preset.tag
+  server.tag_color_with_hash = preset.tag_color_with_hash
+  updateColorFromPicker(server)
+}
+
+function checkIfCustom(server) {
+  if (!server.selectedPreset || !presets[server.selectedPreset]) return
+  const preset = presets[server.selectedPreset]
+
+  if (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash) {
+    server.selectedPreset = ""
+  }
+}
+
+function onColorInput(server) {
+  updateColorFromPicker(server)
+  checkIfCustom(server)
+}
+
+// --- (F) 服务器增删 (根级别) ---
+
+/**
+ * @description “+ 添加服务器”按钮 (v16)
+ */
+const addServer = () => openServerModal(null, null)
+
+/**
+ * @description “+ 子服”按钮 (v16)
+ */
+const addChildServer = (parent) => openServerModal(null, parent)
+
+/**
+ * @description 删除一个服务器（及其所有子服务器）。
+ */
+async function removeServer(server) {
+  const serverToRemove = server
+
+  let confirmed = false
+  if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
+    const childCount = config.value.servers.filter(s => s.parent_ip === serverToRemove.ip).length
+    const message = `确定要删除服务器 ${serverToRemove.ip} 吗？${childCount > 0 ? `\n(其 ${childCount} 个子服务器将一并删除)` : ''}`
+    confirmed = await showConfirm(message, '删除确认');
+  } else {
+    confirmed = await showConfirm(`确定要删除服务器 ${serverToRemove.ip} 吗？`, '删除确认');
+  }
+
+  if (confirmed) {
+    if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
+      // 删除父服及其所有子服
+      const parentIp = serverToRemove.ip
+      config.value.servers = config.value.servers.filter(s => {
+        return s.ip !== serverToRemove.ip && s.parent_ip !== parentIp
+      })
+    } else {
+      // 只删除一个子服
+      const index = config.value.servers.findIndex(s => s.ip === serverToRemove.ip);
+      if (index > -1) {
+        config.value.servers.splice(index, 1)
+      }
+    }
+  }
+}
+
+/**
+ * @description (v16 建议 4) 全局删除所有服务器
+ */
+async function removeAllServers() {
+  const confirmed = await showConfirm(
+      `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
+      '删除全部确认'
+  );
+  if (confirmed) {
+    config.value.servers = [];
+    // (可选) 也可以重置页脚
+    // config.value.footer = "";
+  }
+}
+
+// --- (G) 导入/导出 (IO) 操作 ---
+
+function copyToClipboard() {
+  navigator.clipboard.writeText(outputJson.value).then(() => {
+    showAlert('已复制到剪贴板！', '复制成功')
+  }, () => {
+    showAlert('复制失败！', '复制失败')
+  })
+}
+
+// --- (H) v14 核心重构：双向同步 Watch ---
+//
+const stopWatch = watch(
+    () => config.value.servers,
+    (newFlatList) => {
+      serverTree.value = buildTree(newFlatList)
+    },
+    {
+      deep: true,
+      immediate: true
+    }
+)
+
+const startWatch = () => {
+  stopWatch() // 确保旧的已停止
+  watch(
+      () => config.value.servers,
+      (newFlatList) => {
+        serverTree.value = buildTree(newFlatList)
+      },
+      { deep: true, immediate: true }
+  )
+}
+// --- 7. 初始化 ---
+
+// (v16 建议 5) 组件加载时，尝试从剪贴板自动导入
+onMounted(async () => {
+  try {
+    // 1. 尝试读取剪贴板
+    const text = await navigator.clipboard.readText();
+    if (!text) return; // 剪贴板为空
+
+    // 2. 尝试解析为 JSON
+    const data = JSON.parse(text);
+
+    // 3. 验证是否为我们的配置格式 (必须有 servers 数组 和/或 footer)
+    if (data && (Array.isArray(data.servers) || data.hasOwnProperty('footer'))) {
+      jsonInput.value = text; // 填充到导入框
+      parseAndSetConfig(text); // 自动导入
+      // (v16 建议 5) 保持为空，但提示用户
+      // showAlert('已从剪贴板自动导入配置。', '导入成功');
+    }
+  } catch (e) {
+    // 失败 (权限被拒、剪贴板不是 JSON、JSON 格式不对等)
+    // 在控制台打印错误，但不要打扰用户
+    console.warn('Failed to auto-import from clipboard:', e.message);
+  }
+
+  // (v16 建议 5) 确保初始列表为空 (而不是依赖 defaultJsonString)
+  if (config.value.servers.length === 0) {
+    parseAndSetConfig(`{"footer": "", "servers": []}`);
+  }
+});
+
+// (v16 建议 5) 移除末尾的 parseAndSetConfig(defaultJsonString)
+
+</script>
+
+<template>
+  <div class="layout-container">
+
+    <div class="panel editor-panel">
+      <header class="panel-header">
+        <h1>服务器配置编辑器</h1>
+        <div class="subtitle">拖拽服务器卡片调整优先级</div>
+      </header>
+
+      <div class="panel-body">
+
+        <div class="form-section">
+          <h3>页脚设置</h3>
+          <div class="form-group">
+            <input
+                type="text"
+                v-model="config.footer"
+                placeholder="输入页脚文本"
+            />
+          </div>
+        </div>
+
+        <div class="form-section server-list-section">
+          <div class="server-list-header">
+            <h3>服务器列表</h3>
+            <div class="header-actions">
+              <button @click="removeAllServers" class="btn btn-danger" v-if="config.servers.length > 0">
+                🗑️ 全部删除
+              </button>
+              <button @click="addServer" class="btn btn-add">
+                + 添加服务器
+              </button>
+            </div>
+          </div>
+
+          <draggable
+              v-model="serverTree"
+              :item-key="server => server.ip"
+              handle=".drag-handle"
+              :group="{ name: 'servers', pull: true, put: true }"
+              :move="checkMove"
+              @end="flattenTreeAndSync"
+              class="server-list"
+              :name="'server-list-anim-root'"
+          >
+            <template #item="{ element: server }">
+              <div
+                  :key="server.ip"
+                  class="server-item-container"
+                  :class="{
+                    'is-parent-container': server.children.length > 0
+                  }"
+              >
+                <div
+                    class="server-item-simple"
+                    :class="{
+                      'is-parent': server.children.length > 0,
+                      'is-standalone': server.children.length === 0,
+                      'is-ignored': server.ignore_in_list
+                    }"
+                >
+                  <div class="drag-handle">⠿</div>
+                  <div class="simple-info">
+                    <span
+                        class="simple-tag"
+                        :style="{
+                          backgroundColor: server.tag_color_with_hash,
+                          color: getContrastColor(server.tag_color_with_hash)
+                        }"
+                    >
+                      {{ server.tag || '无标签' }}
+                    </span>
+                    <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
+                    <span class="simple-ip" :class="{ 'with-comment': server.comment }">
+                      {{ server.comment ? '(' + server.ip + ')' : server.ip }}
+                    </span>
+                    <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                  </div>
+                  <div class="simple-actions">
+                    <button
+                        @click="addChildServer(server)"
+                        class="btn btn-add-child-simple"
+                    >
+                      + 子服
+                    </button>
+                    <button @click="openServerModal(server)" class="btn btn-edit-simple">编辑</button>
+                    <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple">×</button>
+                  </div>
+                </div>
+
+                <draggable
+                    v-model="server.children"
+                    :item-key="child => child.ip"
+                    handle=".drag-handle"
+                    :group="{ name: 'servers', pull: true, put: true }"
+                    @end="flattenTreeAndSync"
+                    class="server-list child-list"
+                    :name="'server-list-anim-child'"
+                >
+                  <template #item="{ element: childServer }">
+                    <div
+                        :key="childServer.ip"
+                        class="server-item-simple is-child"
+                        :class="{
+                          'is-ignored': childServer.ignore_in_list
+                        }"
+                    >
+                      <div class="drag-handle">⠿</div>
+                      <div class="simple-info">
+                        <span
+                            class="simple-tag"
+                            :style="{
+                              backgroundColor: childServer.tag_color_with_hash,
+                              color: getContrastColor(childServer.tag_color_with_hash)
+                            }"
+                        >
+                          {{ childServer.tag || '无标签' }}
+                        </span>
+                        <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
+                        <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
+                          {{ childServer.comment ? '(' + childServer.ip + ')' : childServer.ip }}
+                        </span>
+                        <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                      </div>
+                      <div class="simple-actions">
+                        <button @click="openServerModal(childServer)" class="btn btn-edit-simple">编辑</button>
+                        <button @click="removeServer(childServer)" class="btn btn-danger btn-remove-simple">×</button>
+                      </div>
+                    </div>
+                  </template>
+                </draggable>
+              </div>
+            </template>
+          </draggable>
+
+          <div v-if="!serverTree || serverTree.length === 0" class="empty-state">
+            <h3>尚未添加服务器</h3>
+            <p>点击上方"添加"按钮开始配置，或从剪贴板自动导入</p>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel io-panel">
+      <div class="panel-body">
+        <div class="form-section">
+          <h3 class="io-header">1. 导入 (Import)</h3>
+          <p>从机器人 `/mcs export` 导出的 JSON 粘贴到此处：</p>
+          <div class="form-group">
+            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴 JSON..."></textarea>
+          </div>
+          <button @click="loadConfig" class="btn btn-primary">加载配置</button>
+        </div>
+
+        <div class="form-section">
+          <h3 class="io-header">2. 导出 (Export)</h3>
+          <p>复制下面的内容，用于机器人 `/mcs import` 命令：</p>
+          <div class="form-group">
+            <textarea :value="outputJson" rows="15" readonly></textarea>
+          </div>
+          <button @click="copyToClipboard" class="btn btn-secondary">复制到剪贴板</button>
+        </div>
+      </div>
+    </div>
+
+    <transition name="modal-fade">
+      <div v-if="isModalVisible" class="modal-overlay" @click.self="onModalCancel">
+        <div class="modal-box">
+          <div class="modal-header"><h3>{{ modalTitle }}</h3></div>
+          <div class="modal-body"><pre>{{ modalMessage }}</pre></div>
+          <div class="modal-footer">
+            <button v-if="modalType === 'confirm'" @click="onModalCancel" class="btn btn-modal-cancel">取消</button>
+            <button @click="onModalConfirm" class="btn btn-modal-confirm">确认</button>
+          </div>
+        </div>
+      </div>
+    </transition>
+
+
+    <transition name="modal-fade">
+      <div v-if="isServerModalVisible" class="modal-overlay edit-modal" @click.self="closeServerModal">
+        <div class="modal-box edit-modal-box">
+
+          <div class="modal-header">
+            <h3 v-if="modalMode === 'add'">添加新服务器</h3>
+            <h3 v-else>编辑服务器: {{ editingServerIp }}</h3>
+            <button @click="closeServerModal" class="btn-close-modal">×</button>
+          </div>
+
+          <div class="modal-body" v-if="currentServerData">
+            <div class="server-form">
+
+              <div class="form-row">
+                <div class="form-group grow">
+                  <label>服务器地址 (IP) <span class="required">*</span></label>
+                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com"/>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group grow">
+                  <label>父服务器 (Parent IP)</label>
+                  <div class="select-wrapper">
+                    <select v-model="currentServerData.parent_ip">
+                      <option value="">-- 无 (作为根服务器) --</option>
+                      <option
+                          v-for="parent in potentialParentServers"
+                          :key="parent.ip"
+                          :value="parent.ip"
+                          :disabled="parent.ip === editingServerIp" >
+                        [{{ serverTypeLabels[parent.server_type] || '服务器' }}] {{ parent.tag || parent.ip }}
+                      </option>
+                    </select>
+                  </div>
+                  <p
+                      v-if="potentialParentServers.length === 0 && modalMode === 'add'"
+                      class="form-help-text"
+                  >
+                    当前没有可用的父服务器，将作为根服务器添加。
+                  </p>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group grow">
+                  <label>注释 (Comment) (可选)</label>
+                  <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一服 (S1)"/>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>标签 (Tag)</label>
+                  <input
+                      type="text"
+                      v-model="currentServerData.tag"
+                      @input="checkIfCustom(currentServerData)"
+                      placeholder="留空则不显示"
+                  />
+                </div>
+                <div class="form-group">
+                  <label>标签颜色</label>
+                  <input
+                      type="color"
+                      v-model="currentServerData.tag_color_with_hash"
+                      @input="onColorInput(currentServerData)"
+                      class="color-picker"
+                  />
+                </div>
+                <div class="form-group">
+                  <label>快捷预设</label>
+                  <div class="select-wrapper">
+                    <select
+                        v-model="currentServerData.selectedPreset"
+                        @change="applyPreset(currentServerData)"
+                    >
+                      <option value="">-- 自定义 --</option>
+                      <option v-for="(preset, key) in presets" :key="key" :value="key">
+                        {{ preset.tag }}
+                      </option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group form-group-checkbox">
+                  <input
+                      type="checkbox"
+                      v-model="currentServerData.ignore_in_list"
+                      :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                      class="styled-checkbox"
+                  />
+                  <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">在列表中隐藏 (ignore_in_list)</label>
+                </div>
+              </div>
+
+            </div>
+          </div>
+
+          <div class="modal-footer">
+            <button @click="closeServerModal" class="btn btn-modal-cancel">取消</button>
+            <button @click="saveServer" class="btn btn-modal-confirm">
+              {{ modalMode === 'add' ? '确认添加' : '保存' }}
+            </button>
+          </div>
+
+        </div>
+      </div>
+    </transition>
+
+  </div>
+</template>
+
+<style>
+/* 1. 全局和背景 */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+body {
+  background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+  min-height: 100vh;
+  padding: 20px;
+  color: #333;
+}
+
+/* 2. 整体布局 */
+.layout-container {
+  display: grid;
+  grid-template-columns: minmax(600px, 2fr) minmax(350px, 1fr);
+  align-items: flex-start;
+  gap: 20px;
+  max-width: 1600px;
+  width: 100%;
+  margin: 0 auto;
+}
+@media (max-width: 1100px) {
+  .layout-container { grid-template-columns: 1fr; }
+  .io-panel { position: static; top: auto; }
+}
+
+/* 3. 面板样式 */
+.panel {
+  background: rgba(255, 255, 255, 0.98);
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+  min-width: 0;
+}
+.io-panel {
+  position: sticky;
+  top: 20px;
+  align-self: flex-start;
+}
+.panel-header {
+  background: linear-gradient(135deg, #4A00E0, #8E2DE2);
+  color: white;
+  padding: 20px;
+  text-align: center;
+}
+.panel-header h1 { font-size: 28px; margin-bottom: 10px; }
+.panel-header .subtitle { font-size: 16px; opacity: 0.9; }
+.panel-body { padding: 20px; }
+
+/* 5. 表单和按钮 (用于模态框) */
+.form-section { margin-bottom: 20px; }
+.form-section h3 {
+  font-size: 1.4rem;
+  color: #2c3e50;
+  margin-bottom: 15px;
+  padding-bottom: 5px;
+  border-bottom: 2px solid #e0e6ed;
+}
+.io-panel .form-section h3 {
+  font-size: 1.2rem;
+  border-bottom: none;
+  color: #4A00E0;
+}
+.form-section p {
+  margin-bottom: 10px;
+  color: #555;
+  font-size: 0.9rem;
+}
+.form-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+.form-group {
+  margin-bottom: 0px;
+  flex: 1;
+  min-width: 100px;
+  min-width: 0;
+}
+.form-group.grow { flex: 2; }
+label {
+  display: block;
+  margin-bottom: 3px;
+  font-weight: 500;
+  color: #2c3e50;
+  font-size: 0.85rem;
+}
+/* v11 优化 #1: 必填项星号 */
+label .required {
+  color: #f44336;
+  font-weight: bold;
+  margin-left: 2px;
+}
+input[type="text"],
+select,
+textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e0e6ed;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  transition: all 0.2s;
+  max-width: 100%;
+  background-color: #fff;
+}
+input[type="text"]:focus,
+select:focus,
+textarea:focus {
+  border-color: #4A00E0;
+  box-shadow: 0 0 5px rgba(74, 0, 224, 0.2);
+  outline: none;
+}
+textarea {
+  font-family: "JetBrains Mono", "Fira Code", "Consolas", "Courier New", monospace;
+  font-size: 14px;
+  line-height: 1.5;
+  background-color: #fdfdfd;
+}
+.color-picker {
+  height: 38px;
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid #e0e6ed;
+  width: 100%;
+}
+.form-group-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 5px;
+}
+.form-group-checkbox label {
+  margin-bottom: 0;
+  font-weight: 400;
+  color: #333;
+  cursor: pointer;
+}
+.styled-checkbox {
+  width: auto;
+  height: 16px;
+  width: 16px;
+  accent-color: #4A00E0;
+  cursor: pointer;
+}
+.select-wrapper {
+  position: relative;
+  width: 100%;
+}
+.select-wrapper select {
+  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  padding-right: 30px;
+  width: 100%;
+  cursor: pointer;
+}
+.select-wrapper select:disabled {
+  background-color: #f1f1f1;
+  color: #777;
+  cursor: not-allowed;
+}
+.select-wrapper::after {
+  content: '▼';
+  font-size: 12px;
+  color: #7e8c9a;
+  position: absolute;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+/* (v16) 新增：表单辅助提示文本 */
+.form-help-text {
+  font-size: 0.8rem;
+  color: #7e8c9a;
+  margin-top: 5px;
+  margin-bottom: 0;
+}
+.btn {
+  background: #4CAF50;
+  color: white;
+  border: none;
+  padding: 10px 15px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.95rem;
+  transition: all 0.3s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  white-space: nowrap;
+}
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+}
+.btn-primary { background: #4CAF50; }
+.btn-primary:hover { background: #388E3C; }
+.btn-secondary { background: #2196F3; }
+.btn-secondary:hover { background: #1976D2; }
+.btn-danger { background: #f44336; }
+.btn-danger:hover { background: #d32f2f; }
+.btn-add { background: #009688; }
+.btn-add:hover { background: #00796B; }
+
+
+/* 6. 服务器列表 */
+.server-list-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 15px;
+}
+.header-actions {
+  display: flex;
+  gap: 10px;
+}
+.server-list {
+  min-height: 50px;
+}
+.server-item-simple {
+  background: #fff;
+  border: 1px solid #e0e6ed;
+  border-radius: 8px;
+  padding: 10px 12px;
+  display: flex;
+  align-items: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  user-select: none;
+}
+.server-item-simple:hover {
+  border-color: #4A00E0;
+}
+.server-item-simple.is-child {
+  background: #fdfdff;
+  border-left: 4px solid #8E2DE2;
+  margin-bottom: 6px;
+}
+.server-item-simple.is-parent {
+  background: #f5f3ff;
+  border-left: 4px solid #4A00E0;
+}
+.server-item-simple.is-ignored {
+  background: #f9f9f9;
+  opacity: 0.7;
+}
+.server-item-simple.is-ignored .simple-ip {
+  text-decoration: line-through;
+}
+.simple-info {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  overflow: hidden;
+  white-space: nowrap;
+  min-width: 0;
+}
+.simple-tag {
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding: 3px 8px;
+  border-radius: 4px;
+}
+.simple-comment {
+  font-weight: 500;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 1;
+}
+.simple-ip {
+  font-family: "JetBrains Mono", "Consolas", monospace;
+  font-size: 0.95rem;
+  color: #333;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex-shrink: 100;
+}
+.simple-ip.with-comment {
+  color: #7e8c9a;
+  font-size: 0.85rem;
+  margin-left: -5px;
+}
+.simple-ignored-badge {
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: #7e8c9a;
+}
+.simple-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: 10px;
+}
+.btn-add-child-simple {
+  background: #f0f8f7;
+  color: #009688;
+  border: 1px solid #e0e6ed;
+  padding: 5px 10px;
+  font-size: 0.85rem;
+}
+.btn-add-child-simple:hover {
+  background: #e6f0f5;
+  border-color: #009688;
+  transform: none;
+  box-shadow: none;
+}
+.btn-edit-simple {
+  background: #f0f4f8;
+  color: #4A00E0;
+  border: 1px solid #e0e6ed;
+  padding: 5px 10px;
+  font-size: 0.85rem;
+}
+.btn-edit-simple:hover {
+  background: #e6f0f5;
+  border-color: #4A00E0;
+  transform: none;
+  box-shadow: none;
+}
+.btn-remove-simple {
+  background: transparent;
+  color: #e74c3c;
+  font-size: 1.2rem;
+  padding: 5px;
+  line-height: 1;
+}
+.btn-remove-simple:hover {
+  background-color: #fbeeee;
+  transform: none;
+  box-shadow: none;
+}
+.drag-handle {
+  width: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  cursor: grab;
+  color: #7e8c9a;
+  font-size: 1.5rem;
+  padding-top: 0;
+  user-select: none;
+}
+.drag-handle:active { cursor: grabbing; }
+.empty-state {
+  text-align: center;
+  padding: 40px 20px;
+  color: #7e8c9a;
+  background: #f5f7fa;
+  border-radius: 8px;
+}
+.parent-warning {
+  color: #d32f2f;
+  font-size: 0.85rem;
+  margin-top: 5px;
+}
+.server-form {
+  padding: 5px;
+}
+.server-item-simple.sortable-drag {
+  opacity: 0.9;
+  background: #f5f3ff;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  transform: scale(1.02);
+}
+.sortable-ghost {
+  background: #f0f5ff;
+  border: 2px dashed #4A00E0;
+  opacity: 0.7;
+  border-radius: 8px;
+}
+.sortable-ghost > * { visibility: hidden; }
+
+/* 7. 模态弹窗 (Alert/Confirm) */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+}
+.modal-overlay.edit-modal {
+  z-index: 1000;
+}
+.modal-box {
+  background: white;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  width: 90%;
+  max-width: 450px;
+  overflow: hidden;
+  animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+.modal-header {
+  padding: 15px 20px;
+  border-bottom: 1px solid #eee;
+  background: #f9f9f9;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.modal-header h3 {
+  font-size: 1.25rem;
+  color: #2c3e50;
+}
+.modal-body {
+  padding: 25px 20px;
+  font-size: 1rem;
+  line-height: 1.6;
+}
+.modal-body pre {
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  color: #333;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 15px 20px;
+  background: #f9f9f9;
+  border-top: 1px solid #eee;
+}
+.btn-modal-confirm { background: #4A00E0; }
+.btn-modal-confirm:hover { background: #3a00b3; transform: translateY(-2px); }
+.btn-modal-cancel { background: #7e8c9a; }
+.btn-modal-cancel:hover { background: #6a7785; transform: translateY(-2px); }
+@keyframes modal-pop-in {
+  from { opacity: 0; transform: scale(0.8); }
+  to { opacity: 1; transform: scale(1); }
+}
+.modal-fade-enter-active,
+.modal-fade-leave-active {
+  transition: opacity 0.3s ease;
+}
+.modal-fade-enter-from,
+.modal-fade-leave-to {
+  opacity: 0;
+}
+
+/* 8. 模态弹窗 (编辑/添加) (v16 重构后样式不变) */
+.modal-box.edit-modal-box {
+  max-width: 800px;
+}
+.edit-modal .modal-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.btn-close-modal {
+  background: transparent;
+  border: none;
+  font-size: 1.8rem;
+  line-height: 1;
+  color: #7e8c9a;
+  cursor: pointer;
+  padding: 0 5px;
+}
+.btn-close-modal:hover {
+  color: #333;
+}
+
+/* 9. (v14/v15) 拖拽容器和子列表样式 (最终修复) */
+.server-item-container {
+  margin-bottom: 6px;
+  position: relative;
+}
+
+.child-list {
+  margin-left: 40px;
+}
+
+.server-item-container.is-parent-container .child-list {
+  margin-top: 6px;
+  min-height: 20px;
+}
+
+.server-item-container:not(.is-parent-container) .child-list {
+  margin-top: 0;
+  min-height: 0;
+}
+
+/* (v16 建议 1)
+ * 减小子列表 "幽灵" (占位符) 的最小高度
+ * 这使得意外拖入子列表的难度增加
+ */
+.child-list.sortable-ghost {
+  min-height: 30px; /* <-- 原为 50px */
+  background: #f0f5ff;
+  border: 2px dashed #4A00E0;
+  border-radius: 8px;
+}
+.child-list.sortable-ghost > * {
+  visibility: hidden;
+}
+
+.server-list-anim-root-enter-from,
+.server-list-anim-root-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
+}
+.server-list-anim-root-enter-active,
+.server-list-anim-root-leave-active {
+  transition: all 0.3s ease;
+}
+.server-list-anim-root-move {
+  transition: transform 0.3s cubic-bezier(0.55, 0, 0.1, 1);
+}
+.server-item-container.sortable-ghost {
+  background: #f0f5ff;
+  border: 2px dashed #4A00E0;
+  opacity: 0.7;
+  border-radius: 8px;
+  min-height: 50px;
+}
+.server-item-container.sortable-ghost > * {
+  visibility: hidden;
+}
+
+.server-list-anim-child-enter-active,
+.server-list-anim-child-leave-active {
+  transition: all 0.3s ease;
+}
+.server-list-anim-child-enter-from,
+.server-list-anim-child-leave-to {
+  opacity: 0;
+  transform: translateX(30px);
+}
+.server-list-anim-child-move {
+  transition: transform 0.3s ease;
+}
+
+</style>
