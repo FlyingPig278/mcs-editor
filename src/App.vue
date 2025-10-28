@@ -754,9 +754,15 @@ onMounted(async () => {
         <div class="modal-box edit-modal-box">
 
           <div class="modal-header">
-            <h3 v-if="modalMode === 'add'">添加新服务器</h3>
-            <h3 v-else>编辑服务器: {{ editingServerIp }}</h3>
-            <button @click="closeServerModal" class="btn-close-modal">×</button>
+            <h3 v-if="modalMode === 'add'">
+              <i class="fas fa-plus-circle"></i> 添加新服务器
+            </h3>
+            <h3 v-else>
+              <i class="fas fa-edit"></i> 编辑服务器: {{ editingServerIp }}
+            </h3>
+            <button @click="closeServerModal" class="btn-close-modal">
+              <i class="fas fa-times"></i>
+            </button>
           </div>
 
           <div class="modal-body" v-if="currentServerData">
@@ -843,7 +849,9 @@ onMounted(async () => {
                       :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
                       class="styled-checkbox"
                   />
-                  <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">在列表中隐藏 (ignore_in_list)</label>
+                  <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">
+                    <i class="fas fa-eye-slash"></i> 在列表中隐藏 (ignore_in_list)
+                  </label>
                 </div>
               </div>
 
@@ -851,9 +859,11 @@ onMounted(async () => {
           </div>
 
           <div class="modal-footer">
-            <button @click="closeServerModal" class="btn btn-modal-cancel">取消</button>
-            <button @click="saveServer" class="btn btn-modal-confirm">
-              {{ modalMode === 'add' ? '确认添加' : '保存' }}
+            <button @click="closeServerModal" class="btn-modal-cancel">
+              <i class="fas fa-times"></i> 取消
+            </button>
+            <button @click="saveServer" class="btn-modal-confirm">
+              <i class="fas fa-save"></i> {{ modalMode === 'add' ? '确认添加' : '保存更改' }}
             </button>
           </div>
 
@@ -870,7 +880,7 @@ onMounted(async () => {
   box-sizing: border-box;
   margin: 0;
   padding: 0;
-  font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 body {
   background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
@@ -918,6 +928,7 @@ body {
 .panel-body { padding: 20px; }
 
 /* 5. 表单和按钮 (用于模态框) */
+/* (注意：这些是全局回退样式，新的弹窗将使用更具体的 .server-form 样式) */
 .form-section { margin-bottom: 20px; }
 .form-section h3 {
   font-size: 1.4rem;
@@ -1296,10 +1307,8 @@ textarea {
   background: #f9f9f9;
   border-top: 1px solid #eee;
 }
-.btn-modal-confirm { background: #4A00E0; }
-.btn-modal-confirm:hover { background: #3a00b3; transform: translateY(-2px); }
-.btn-modal-cancel { background: #7e8c9a; }
-.btn-modal-cancel:hover { background: #6a7785; transform: translateY(-2px); }
+/* (注意：旧的 .btn-modal-confirm 和 .btn-modal-cancel 已被移除，) */
+/* (它们将被下面 "弹窗美化" 部分的新样式取代) */
 @keyframes modal-pop-in {
   from { opacity: 0; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1); }
@@ -1312,29 +1321,246 @@ textarea {
 .modal-fade-leave-to {
   opacity: 0;
 }
+/* --- (v16) 弹窗美化 - 开始 (来自 AI 的建议) --- */
+.modal-overlay.edit-modal {
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(5px);
+}
 
-/* 8. 模态弹窗 (编辑/添加) (v16 重构后样式不变) */
 .modal-box.edit-modal-box {
-  max-width: 800px;
+  max-width: 650px;
+  border-radius: 16px;
+  overflow: hidden;
+  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(145deg, #ffffff, #f5f7fa);
 }
-.edit-modal .modal-body {
-  max-height: 70vh;
-  overflow-y: auto;
+
+.edit-modal-box .modal-header {
+  background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+  color: white;
+  padding: 20px 25px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
 }
+
+.edit-modal-box .modal-header h3 {
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  color: white;
+}
+
 .btn-close-modal {
   background: transparent;
   border: none;
   font-size: 1.8rem;
   line-height: 1;
-  color: #7e8c9a;
+  color: rgba(255, 255, 255, 0.8);
   cursor: pointer;
   padding: 0 5px;
-}
-.btn-close-modal:hover {
-  color: #333;
+  transition: all 0.3s;
 }
 
-/* 9. (v14/v15) 拖拽容器和子列表样式 (最终修复) */
+.btn-close-modal:hover {
+  color: white;
+  transform: scale(1.1);
+}
+
+.edit-modal-box .modal-body {
+  padding: 25px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.server-form {
+  padding: 5px;
+}
+
+.server-form .form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 20px;
+  margin-bottom: 20px;
+}
+
+.server-form .form-group {
+  margin-bottom: 0px;
+  flex: 1;
+  min-width: 100px;
+  min-width: 0;
+  position: relative;
+}
+
+.server-form label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: #2c3e50;
+  font-size: 0.95rem;
+  display: flex;
+  align-items: center;
+}
+
+.server-form label .required {
+  color: #ff4757;
+  font-weight: bold;
+  margin-left: 4px;
+}
+
+.server-form input[type="text"],
+.server-form select {
+  width: 100%;
+  padding: 14px 15px;
+  border: 1px solid #d1d5db;
+  border-radius: 10px;
+  font-size: 1rem;
+  transition: all 0.3s;
+  background-color: #fff;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+  padding-left: 25px; /* (为 ::before 装饰留出空间) */
+}
+
+.server-form input[type="text"]:focus,
+.server-form select:focus {
+  border-color: #4A00E0;
+  box-shadow: 0 0 0 3px rgba(74, 0, 224, 0.15);
+  outline: none;
+}
+
+.server-form .color-picker {
+  height: 48px;
+  padding: 4px;
+  border-radius: 10px;
+  border: 1px solid #d1d5db;
+  width: 100%;
+  cursor: pointer;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.server-form .form-group-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 0;
+}
+
+.server-form .form-group-checkbox label {
+  margin-bottom: 0;
+  font-weight: 500;
+  color: #2d3436;
+  cursor: pointer;
+  font-size: 1rem;
+}
+
+.server-form .styled-checkbox {
+  width: 20px;
+  height: 20px;
+  accent-color: #4A00E0;
+  cursor: pointer;
+}
+
+.server-form .select-wrapper::after {
+  right: 15px; /* (调整以匹配更大的内边距) */
+}
+
+.server-form .form-help-text {
+  font-size: 0.85rem;
+  color: #7e8c9a;
+  margin-top: 8px;
+  margin-bottom: 0;
+  line-height: 1.4;
+}
+
+.edit-modal-box .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 15px;
+  padding: 20px 25px;
+  background: #f8f9fa;
+  border-top: 1px solid #e9ecef;
+}
+
+/* (v16) 新的弹窗按钮样式 (将应用于所有弹窗) */
+.btn-modal-cancel {
+  background: #f1f2f6;
+  color: #2d3436;
+  border: none;
+  padding: 12px 25px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+}
+
+.btn-modal-cancel:hover {
+  background: #e9ecef;
+  transform: translateY(-2px);
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.btn-modal-confirm {
+  background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+  color: white;
+  border: none;
+  padding: 12px 30px;
+  border-radius: 10px;
+  font-weight: 600;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s;
+  box-shadow: 0 4px 10px rgba(37, 117, 252, 0.3);
+}
+
+.btn-modal-confirm:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 15px rgba(37, 117, 252, 0.4);
+  background: linear-gradient(135deg, #5d0fb9 0%, #1c6ae4 100%);
+}
+
+/* (v16) 表单图标装饰 */
+.server-form .form-group::before {
+  content: '';
+  position: absolute;
+  top: 43px; /* (调整以匹配新的 input 高度) */
+  left: 12px;
+  width: 4px;
+  height: 20px;
+  background: linear-gradient(to bottom, #6a11cb, #2575fc);
+  border-radius: 2px;
+  opacity: 0.7;
+}
+/* (v16) 颜色选择器和复选框不需要前置装饰 */
+.server-form .form-group:has(.color-picker)::before,
+.server-form .form-group-checkbox::before {
+  display: none;
+}
+.server-form .form-group:has(.color-picker) input {
+  padding-left: 4px; /* (重置颜色选择器的 padding) */
+}
+
+
+/* (v16) 响应式调整 */
+@media (max-width: 768px) {
+  .server-form .form-row {
+    flex-direction: column;
+    gap: 15px;
+  }
+
+  .edit-modal-box {
+    width: 95%;
+  }
+}
+/* --- 弹窗美化 - 结束 --- */
+
+
+/* 9. (v14/v15) 拖拽容器和子列表样式 (原始代码，保持不变) */
 .server-item-container {
   margin-bottom: 6px;
   position: relative;
