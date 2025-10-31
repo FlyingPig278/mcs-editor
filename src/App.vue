@@ -111,18 +111,18 @@ function trapFocus(event, containerRef) {
 
 function handleGlobalKeydown(event) {
   if (event.key === 'Escape') {
-    if (isServerModalVisible.value) {
-      event.preventDefault()
-      closeServerModal()
-    } else if (isModalVisible.value) {
+    if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
       event.preventDefault()
       onModalCancel()
+    } else if (isServerModalVisible.value) {
+      event.preventDefault()
+      closeServerModal()
     }
   } else if (event.key === 'Tab') {
-    if (isServerModalVisible.value) {
-      trapFocus(event, serverModalRef)
-    } else if (isModalVisible.value) {
+    if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
       trapFocus(event, alertModalRef)
+    } else if (isServerModalVisible.value) {
+      trapFocus(event, serverModalRef)
     }
   }
 }
@@ -347,11 +347,11 @@ function sanitizeIpForId(ip) {
 function buildTree(flatList) {
   const map = {}
   const serversWithChildren = flatList
-      .map(server => {
-        const serverCopy = { ...server, children: [] }
-        map[serverCopy.ip] = serverCopy
-        return serverCopy
-      })
+    .map(server => {
+      const serverCopy = { ...server, children: [] }
+      map[serverCopy.ip] = serverCopy
+      return serverCopy
+    })
 
   const tree = []
 
@@ -474,9 +474,9 @@ function checkMove(moveEvent) {
 
   // 检查被拖拽的元素是否是一个 "父服" (有子节点)
   if (
-      draggedEl &&
-      draggedEl.children &&
-      draggedEl.children.length > 0
+    draggedEl &&
+    draggedEl.children &&
+    draggedEl.children.length > 0
   ) {
     // 检查目标列表是否是一个 "子列表"
     if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
@@ -566,8 +566,8 @@ async function removeServer(server) {
  */
 async function removeAllServers() {
   const confirmed = await showConfirm(
-      `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
-      '删除全部确认'
+    `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
+    '删除全部确认'
   );
   if (confirmed) {
     config.value.servers = [];
@@ -589,24 +589,24 @@ function copyToClipboard() {
 // --- (H) v14 核心重构：双向同步 Watch ---
 //
 const stopWatch = watch(
-    () => config.value.servers,
-    (newFlatList) => {
-      serverTree.value = buildTree(newFlatList)
-    },
-    {
-      deep: true,
-      immediate: true
-    }
+  () => config.value.servers,
+  (newFlatList) => {
+    serverTree.value = buildTree(newFlatList)
+  },
+  {
+    deep: true,
+    immediate: true
+  }
 )
 
 const startWatch = () => {
   stopWatch() // 确保旧的已停止
   watch(
-      () => config.value.servers,
-      (newFlatList) => {
-        serverTree.value = buildTree(newFlatList)
-      },
-      { deep: true, immediate: true }
+    () => config.value.servers,
+    (newFlatList) => {
+      serverTree.value = buildTree(newFlatList)
+    },
+    { deep: true, immediate: true }
   )
 }
 // --- 7. 初始化 ---
@@ -663,11 +663,7 @@ onBeforeUnmount(() => {
         <div class="form-section">
           <h3>页脚设置</h3>
           <div class="form-group">
-            <input
-                type="text"
-                v-model="config.footer"
-                placeholder="输入页脚文本"
-            />
+            <input type="text" v-model="config.footer" placeholder="输入页脚文本" />
           </div>
         </div>
 
@@ -684,41 +680,24 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <draggable
-              v-model="serverTree"
-              :item-key="server => server.ip"
-              handle=".drag-handle"
-              :group="{ name: 'servers', pull: true, put: true }"
-              :move="checkMove"
-              @end="flattenTreeAndSync"
-              class="server-list"
-              :name="'server-list-anim-root'"
-          >
+          <draggable v-model="serverTree" :item-key="server => server.ip" handle=".drag-handle"
+            :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
+            class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
-              <div
-                  :key="server.ip"
-                  class="server-item-container"
-                  :class="{
-                    'is-parent-container': server.children.length > 0
-                  }"
-              >
-                <div
-                    class="server-item-simple"
-                    :class="{
-                      'is-parent': server.children.length > 0,
-                      'is-standalone': server.children.length === 0,
-                      'is-ignored': server.ignore_in_list
-                    }"
-                >
+              <div :key="server.ip" class="server-item-container" :class="{
+                'is-parent-container': server.children.length > 0
+              }">
+                <div class="server-item-simple" :class="{
+                  'is-parent': server.children.length > 0,
+                  'is-standalone': server.children.length === 0,
+                  'is-ignored': server.ignore_in_list
+                }">
                   <div class="drag-handle">⠿</div>
                   <div class="simple-info">
-                    <span
-                        class="simple-tag"
-                        :style="{
-                          backgroundColor: server.tag_color_with_hash,
-                          color: getContrastColor(server.tag_color_with_hash)
-                        }"
-                    >
+                    <span class="simple-tag" :style="{
+                      backgroundColor: server.tag_color_with_hash,
+                      color: getContrastColor(server.tag_color_with_hash)
+                    }">
                       {{ server.tag || '无标签' }}
                     </span>
                     <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
@@ -728,10 +707,7 @@ onBeforeUnmount(() => {
                     <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                   </div>
                   <div class="simple-actions">
-                    <button
-                        @click="addChildServer(server)"
-                        class="btn btn-add-child-simple"
-                    >
+                    <button @click="addChildServer(server)" class="btn btn-add-child-simple">
                       + 子服
                     </button>
                     <button @click="openServerModal(server)" class="btn btn-edit-simple">编辑</button>
@@ -739,32 +715,19 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <draggable
-                    v-model="server.children"
-                    :item-key="child => child.ip"
-                    handle=".drag-handle"
-                    :group="{ name: 'servers', pull: true, put: true }"
-                    @end="flattenTreeAndSync"
-                    class="server-list child-list"
-                    :name="'server-list-anim-child'"
-                >
+                <draggable v-model="server.children" :item-key="child => child.ip" handle=".drag-handle"
+                  :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync"
+                  class="server-list child-list" :name="'server-list-anim-child'">
                   <template #item="{ element: childServer }">
-                    <div
-                        :key="childServer.ip"
-                        class="server-item-simple is-child"
-                        :class="{
-                          'is-ignored': childServer.ignore_in_list
-                        }"
-                    >
+                    <div :key="childServer.ip" class="server-item-simple is-child" :class="{
+                      'is-ignored': childServer.ignore_in_list
+                    }">
                       <div class="drag-handle">⠿</div>
                       <div class="simple-info">
-                        <span
-                            class="simple-tag"
-                            :style="{
-                              backgroundColor: childServer.tag_color_with_hash,
-                              color: getContrastColor(childServer.tag_color_with_hash)
-                            }"
-                        >
+                        <span class="simple-tag" :style="{
+                          backgroundColor: childServer.tag_color_with_hash,
+                          color: getContrastColor(childServer.tag_color_with_hash)
+                        }">
                           {{ childServer.tag || '无标签' }}
                         </span>
                         <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
@@ -815,21 +778,9 @@ onBeforeUnmount(() => {
     </div>
 
     <transition name="modal-fade">
-      <div
-          v-if="isModalVisible"
-          class="modal-overlay"
-          role="presentation"
-          @click.self="onModalCancel"
-      >
-        <div
-            class="modal-box"
-            ref="alertModalRef"
-            role="dialog"
-            aria-modal="true"
-            :aria-labelledby="modalIds.alertTitle"
-            :aria-describedby="modalIds.alertMessage"
-            tabindex="-1"
-        >
+      <div v-if="isModalVisible" class="modal-overlay" role="presentation" @click.self="onModalCancel">
+        <div class="modal-box" ref="alertModalRef" role="dialog" aria-modal="true"
+          :aria-labelledby="modalIds.alertTitle" :aria-describedby="modalIds.alertMessage" tabindex="-1">
           <div class="modal-header">
             <h3 :id="modalIds.alertTitle">{{ modalTitle }}</h3>
           </div>
@@ -837,12 +788,8 @@ onBeforeUnmount(() => {
             <pre :id="modalIds.alertMessage">{{ modalMessage }}</pre>
           </div>
           <div class="modal-footer">
-            <button
-                v-if="modalType === 'confirm'"
-                @click="onModalCancel"
-                class="btn btn-modal-cancel"
-                type="button"
-            >取消</button>
+            <button v-if="modalType === 'confirm'" @click="onModalCancel" class="btn btn-modal-cancel"
+              type="button">取消</button>
             <button @click="onModalConfirm" class="btn btn-modal-confirm" type="button">确认</button>
           </div>
         </div>
@@ -851,21 +798,10 @@ onBeforeUnmount(() => {
 
 
     <transition name="modal-fade">
-      <div
-          v-if="isServerModalVisible"
-          class="modal-overlay edit-modal"
-          role="presentation"
-          @click.self="closeServerModal"
-      >
-        <div
-            class="modal-box edit-modal-box"
-            ref="serverModalRef"
-            role="dialog"
-            aria-modal="true"
-            :aria-labelledby="modalIds.serverTitle"
-            :aria-describedby="modalIds.serverBody"
-            tabindex="-1"
-        >
+      <div v-if="isServerModalVisible" class="modal-overlay edit-modal" role="presentation"
+        @click.self="closeServerModal">
+        <div class="modal-box edit-modal-box" ref="serverModalRef" role="dialog" aria-modal="true"
+          :aria-labelledby="modalIds.serverTitle" :aria-describedby="modalIds.serverBody" tabindex="-1">
 
           <div class="modal-header">
             <h3 v-if="modalMode === 'add'" :id="modalIds.serverTitle">
@@ -885,14 +821,47 @@ onBeforeUnmount(() => {
               <div class="form-row">
                 <div class="form-group grow">
                   <label>服务器地址 (IP) <span class="required">*</span></label>
-                  <input
-                      type="text"
-                      v-model="currentServerData.ip"
-                      placeholder="例如: play.example.com"
-                      data-autofocus
-                  />
+                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com" data-autofocus />
                 </div>
               </div>
+
+              <div class="form-row">
+                <div class="form-group grow">
+                  <label>注释 (Comment) (可选)</label>
+                  <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)" />
+                </div>
+              </div>
+
+              <hr class="form-divider">
+
+              <div class="form-row">
+                <div class="form-group">
+                  <label>标签 (Tag)</label>
+                  <input type="text" v-model="currentServerData.tag" @input="checkIfCustom(currentServerData)"
+                    placeholder="留空则不显示" />
+                </div>
+                <div class="form-group">
+                  <label>标签颜色</label>
+                  <input type="color" v-model="currentServerData.tag_color_with_hash"
+                    @input="onColorInput(currentServerData)" class="color-picker" />
+                </div>
+                <div class="form-group">
+                  <label>快捷预设</label>
+                  <div class="select-wrapper">
+                    <select v-model="currentServerData.selectedPreset" @change="applyPreset(currentServerData)">
+                      <option value="">-- 自定义 --</option>
+                      <option v-for="(preset, key) in presets" :key="key" :value="key">
+                        {{ preset.tag }}
+                      </option>
+                    </select>
+                  </div>
+                  <p class="form-help-text" style="margin-top: 8px;">
+                    💡 选择预设可自动填充标签和颜色。
+                  </p>
+                </div>
+              </div>
+
+              <hr class="form-divider">
 
               <div class="form-row">
                 <div class="form-group grow">
@@ -900,75 +869,22 @@ onBeforeUnmount(() => {
                   <div class="select-wrapper">
                     <select v-model="currentServerData.parent_ip">
                       <option value="">-- 默认为根服务器 --</option>
-                      <option
-                          v-for="parent in potentialParentServers"
-                          :key="parent.ip"
-                          :value="parent.ip"
-                          :disabled="parent.ip === editingServerIp"
-                      >
+                      <option v-for="parent in potentialParentServers" :key="parent.ip" :value="parent.ip"
+                        :disabled="parent.ip === editingServerIp">
                         [{{ serverTypeLabels[parent.server_type] || '服务器' }}] {{ parent.tag || parent.ip }}
                       </option>
                     </select>
                   </div>
-                  <p
-                      v-if="potentialParentServers.length === 0 && modalMode === 'add'"
-                      class="form-help-text"
-                  >
+                  <p v-if="potentialParentServers.length === 0 && modalMode === 'add'" class="form-help-text">
                     当前没有可用的父服务器，将作为根服务器添加。
                   </p>
                 </div>
               </div>
 
               <div class="form-row">
-                <div class="form-group grow">
-                  <label>注释 (Comment) (可选)</label>
-                  <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)"/>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div class="form-group">
-                  <label>标签 (Tag)</label>
-                  <input
-                      type="text"
-                      v-model="currentServerData.tag"
-                      @input="checkIfCustom(currentServerData)"
-                      placeholder="留空则不显示"
-                  />
-                </div>
-                <div class="form-group">
-                  <label>标签颜色</label>
-                  <input
-                      type="color"
-                      v-model="currentServerData.tag_color_with_hash"
-                      @input="onColorInput(currentServerData)"
-                      class="color-picker"
-                  />
-                </div>
-                <div class="form-group">
-                  <label>快捷预设</label>
-                  <div class="select-wrapper">
-                    <select
-                        v-model="currentServerData.selectedPreset"
-                        @change="applyPreset(currentServerData)"
-                    >
-                      <option value="">-- 自定义 --</option>
-                      <option v-for="(preset, key) in presets" :key="key" :value="key">
-                        {{ preset.tag }}
-                      </option>
-                    </select>
-                  </div>
-                </div>
-              </div>
-
-              <div class="form-row">
                 <div class="form-group form-group-checkbox">
-                  <input
-                      type="checkbox"
-                      v-model="currentServerData.ignore_in_list"
-                      :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                      class="styled-checkbox"
-                  />
+                  <input type="checkbox" v-model="currentServerData.ignore_in_list"
+                    :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')" class="styled-checkbox" />
                   <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">
                     <i class="fas fa-eye-slash"></i> 在列表中隐藏 (ignore_in_list)
                   </label>
@@ -996,6 +912,7 @@ onBeforeUnmount(() => {
 
 <style>
 @import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css");
+
 :root {
   --color-body-gradient-start: #eef2ff;
   --color-body-gradient-end: #f9fafb;
@@ -1026,6 +943,7 @@ onBeforeUnmount(() => {
   padding: 0;
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
+
 body {
   background: linear-gradient(135deg, var(--color-body-gradient-start), var(--color-body-gradient-end));
   min-height: 100vh;
@@ -1044,9 +962,16 @@ body {
   width: 100%;
   margin: 0 auto;
 }
+
 @media (max-width: 1100px) {
-  .layout-container { grid-template-columns: 1fr; }
-  .io-panel { position: static; top: auto; }
+  .layout-container {
+    grid-template-columns: 1fr;
+  }
+
+  .io-panel {
+    position: static;
+    top: auto;
+  }
 }
 
 /* 3. 面板样式 */
@@ -1058,24 +983,40 @@ body {
   min-width: 0;
   border: 1px solid var(--color-border);
 }
+
 .io-panel {
   position: sticky;
   top: 20px;
   align-self: flex-start;
 }
+
 .panel-header {
   background: linear-gradient(135deg, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
   color: #fff;
   padding: 24px 20px;
   text-align: center;
 }
-.panel-header h1 { font-size: 28px; margin-bottom: 10px; }
-.panel-header .subtitle { font-size: 16px; opacity: 0.9; }
-.panel-body { padding: 20px; }
+
+.panel-header h1 {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+
+.panel-header .subtitle {
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+.panel-body {
+  padding: 20px;
+}
 
 /* 5. 表单和按钮 (用于模态框) */
 /* (注意：这些是全局回退样式，新的弹窗将使用更具体的 .server-form 样式) */
-.form-section { margin-bottom: 20px; }
+.form-section {
+  margin-bottom: 20px;
+}
+
 .form-section h3 {
   font-size: 1.4rem;
   color: var(--color-text-primary);
@@ -1083,24 +1024,37 @@ body {
   padding-bottom: 5px;
   border-bottom: 2px solid var(--color-border);
 }
+
 .io-panel .form-section h3 {
   font-size: 1.2rem;
   border-bottom: none;
   color: var(--color-primary);
 }
+
 .form-section p {
   margin-bottom: 10px;
   color: var(--color-text-secondary);
   font-size: 0.9rem;
 }
-.form-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
+
+.form-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
 .form-group {
   margin-bottom: 0px;
   flex: 1;
   min-width: 100px;
   min-width: 0;
 }
-.form-group.grow { flex: 2; }
+
+.form-group.grow {
+  flex: 2;
+}
+
 label {
   display: block;
   margin-bottom: 3px;
@@ -1108,12 +1062,14 @@ label {
   color: #2c3e50;
   font-size: 0.85rem;
 }
+
 /* v11 优化 #1: 必填项星号 */
 label .required {
   color: var(--color-danger);
   font-weight: bold;
   margin-left: 2px;
 }
+
 input[type="text"],
 select,
 textarea {
@@ -1127,11 +1083,13 @@ textarea {
   background-color: var(--color-surface);
   color: var(--color-text-primary);
 }
+
 input[type="text"]::placeholder,
 textarea::placeholder {
   color: var(--color-text-secondary);
   opacity: 0.6;
 }
+
 input[type="text"]:focus,
 select:focus,
 textarea:focus {
@@ -1139,6 +1097,7 @@ textarea:focus {
   box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
 }
+
 button:focus-visible,
 .btn:focus-visible,
 .btn-close-modal:focus-visible {
@@ -1153,6 +1112,7 @@ textarea {
   background-color: var(--color-surface);
   color: var(--color-text-primary);
 }
+
 .color-picker {
   height: 38px;
   padding: 4px;
@@ -1161,18 +1121,21 @@ textarea {
   width: 100%;
   background: var(--color-surface);
 }
+
 .form-group-checkbox {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 5px;
 }
+
 .form-group-checkbox label {
   margin-bottom: 0;
   font-weight: 400;
   color: #333;
   cursor: pointer;
 }
+
 .styled-checkbox {
   width: auto;
   height: 16px;
@@ -1180,21 +1143,27 @@ textarea {
   accent-color: #4A00E0;
   cursor: pointer;
 }
+
 .select-wrapper {
   position: relative;
   width: 100%;
 }
+
 .select-wrapper select {
-  appearance: none; -webkit-appearance: none; -moz-appearance: none;
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
   padding-right: 30px;
   width: 100%;
   cursor: pointer;
 }
+
 .select-wrapper select:disabled {
   background-color: #f1f1f1;
   color: #777;
   cursor: not-allowed;
 }
+
 .select-wrapper::after {
   content: '▼';
   font-size: 12px;
@@ -1205,6 +1174,7 @@ textarea {
   transform: translateY(-50%);
   pointer-events: none;
 }
+
 /* (v16) 新增：表单辅助提示文本 */
 .form-help-text {
   font-size: 0.8rem;
@@ -1212,6 +1182,7 @@ textarea {
   margin-top: 5px;
   margin-bottom: 0;
 }
+
 .btn {
   border: 1px solid transparent;
   border-radius: 10px;
@@ -1227,18 +1198,51 @@ textarea {
   white-space: nowrap;
   transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
+
 .btn:hover {
   transform: translateY(-1px);
   box-shadow: var(--shadow-hover);
 }
-.btn-primary { background: var(--color-success); color: #fff; border-color: transparent; }
-.btn-primary:hover { background: var(--color-success-hover); }
-.btn-secondary { background: var(--color-secondary); color: #fff; border-color: transparent; }
-.btn-secondary:hover { background: var(--color-secondary-hover); }
-.btn-danger { background: var(--color-danger); color: #fff; border-color: transparent; }
-.btn-danger:hover { background: var(--color-danger-hover); }
-.btn-add { background: var(--color-primary); color: #fff; border-color: transparent; }
-.btn-add:hover { background: var(--color-primary-hover); }
+
+.btn-primary {
+  background: var(--color-success);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-primary:hover {
+  background: var(--color-success-hover);
+}
+
+.btn-secondary {
+  background: var(--color-secondary);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-secondary:hover {
+  background: var(--color-secondary-hover);
+}
+
+.btn-danger {
+  background: var(--color-danger);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-danger:hover {
+  background: var(--color-danger-hover);
+}
+
+.btn-add {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: transparent;
+}
+
+.btn-add:hover {
+  background: var(--color-primary-hover);
+}
 
 
 /* 6. 服务器列表 */
@@ -1248,13 +1252,16 @@ textarea {
   align-items: center;
   margin-bottom: 15px;
 }
+
 .header-actions {
   display: flex;
   gap: 10px;
 }
+
 .server-list {
   min-height: 50px;
 }
+
 .server-item-simple {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1265,26 +1272,32 @@ textarea {
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
   user-select: none;
 }
+
 .server-item-simple:hover {
   border-color: var(--color-primary);
   box-shadow: 0 10px 16px rgba(79, 70, 229, 0.15);
 }
+
 .server-item-simple.is-child {
   background: var(--color-surface-muted);
   border-left: 4px solid var(--color-panel-gradient-end);
   margin-bottom: 6px;
 }
+
 .server-item-simple.is-parent {
   background: var(--color-surface-muted);
   border-left: 4px solid var(--color-panel-gradient-start);
 }
+
 .server-item-simple.is-ignored {
   background: #f9f9f9;
   opacity: 0.7;
 }
+
 .server-item-simple.is-ignored .simple-ip {
   text-decoration: line-through;
 }
+
 .simple-info {
   flex: 1;
   display: flex;
@@ -1294,12 +1307,14 @@ textarea {
   white-space: nowrap;
   min-width: 0;
 }
+
 .simple-tag {
   font-size: 0.85rem;
   font-weight: 500;
   padding: 3px 8px;
   border-radius: 4px;
 }
+
 .simple-comment {
   font-weight: 500;
   color: var(--color-text-primary);
@@ -1308,6 +1323,7 @@ textarea {
   white-space: nowrap;
   flex-shrink: 1;
 }
+
 .simple-ip {
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.95rem;
@@ -1317,21 +1333,25 @@ textarea {
   white-space: nowrap;
   flex-shrink: 100;
 }
+
 .simple-ip.with-comment {
   color: var(--color-text-secondary);
   font-size: 0.85rem;
   margin-left: -5px;
 }
+
 .simple-ignored-badge {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--color-text-secondary);
 }
+
 .simple-actions {
   display: flex;
   gap: 8px;
   margin-left: 10px;
 }
+
 .btn-add-child-simple {
   background: var(--color-surface-muted);
   color: var(--color-primary);
@@ -1341,6 +1361,7 @@ textarea {
   border-radius: 8px;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
+
 .btn-add-child-simple:hover,
 .btn-add-child-simple:focus-visible {
   background: var(--color-body-gradient-start);
@@ -1349,6 +1370,7 @@ textarea {
   transform: none;
   box-shadow: none;
 }
+
 .btn-edit-simple {
   background: #f0f4f8;
   color: #4A00E0;
@@ -1356,12 +1378,14 @@ textarea {
   padding: 5px 10px;
   font-size: 0.85rem;
 }
+
 .btn-edit-simple:hover {
   background: #e6f0f5;
   border-color: #4A00E0;
   transform: none;
   box-shadow: none;
 }
+
 .btn-remove-simple {
   background: transparent;
   color: #e74c3c;
@@ -1369,11 +1393,13 @@ textarea {
   padding: 5px;
   line-height: 1;
 }
+
 .btn-remove-simple:hover {
   background-color: #fbeeee;
   transform: none;
   box-shadow: none;
 }
+
 .drag-handle {
   width: 24px;
   display: flex;
@@ -1386,7 +1412,11 @@ textarea {
   padding-top: 0;
   user-select: none;
 }
-.drag-handle:active { cursor: grabbing; }
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
 .empty-state {
   text-align: center;
   padding: 40px 20px;
@@ -1394,27 +1424,41 @@ textarea {
   background: #f5f7fa;
   border-radius: 8px;
 }
+
 .parent-warning {
   color: #d32f2f;
   font-size: 0.85rem;
   margin-top: 5px;
 }
+
 .server-form {
   padding: 5px;
 }
+
+.form-divider {
+  border: none;
+  height: 1px;
+  background-color: var(--color-border);
+  margin: 24px 0;
+}
+
 .server-item-simple.sortable-drag {
   opacity: 0.9;
   background: #f5f3ff;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
   transform: scale(1.02);
 }
+
 .sortable-ghost {
   background: #f0f5ff;
   border: 2px dashed var(--color-primary);
   opacity: 0.7;
   border-radius: 8px;
 }
-.sortable-ghost > * { visibility: hidden; }
+
+.sortable-ghost>* {
+  visibility: hidden;
+}
 
 /* 7. 模态弹窗 (Alert/Confirm) */
 .modal-overlay {
@@ -1428,9 +1472,11 @@ textarea {
   padding: 20px;
   z-index: 2000;
 }
+
 .modal-overlay.edit-modal {
   z-index: 1000;
 }
+
 .modal-box {
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -1440,6 +1486,7 @@ textarea {
   overflow: hidden;
   animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
+
 .modal-header {
   padding: 15px 20px;
   border-bottom: 1px solid var(--color-border);
@@ -1448,22 +1495,26 @@ textarea {
   justify-content: space-between;
   align-items: center;
 }
+
 .modal-header h3 {
   font-size: 1.25rem;
   color: var(--color-text-primary);
 }
+
 .modal-body {
   padding: 28px 24px;
   font-size: 1rem;
   line-height: 1.6;
   color: var(--color-text-primary);
 }
+
 .modal-body pre {
   white-space: pre-wrap;
   word-wrap: break-word;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
   color: var(--color-text-secondary);
 }
+
 .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -1514,24 +1565,34 @@ textarea {
 }
 
 @keyframes modal-pop-in {
-  from { opacity: 0; transform: scale(0.8); }
-  to { opacity: 1; transform: scale(1); }
+  from {
+    opacity: 0;
+    transform: scale(0.8);
+  }
+
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
 }
+
 .modal-fade-enter-active,
 .modal-fade-leave-active {
   transition: opacity 0.3s ease;
 }
+
 .modal-fade-enter-from,
 .modal-fade-leave-to {
   opacity: 0;
 }
+
 /* --- 编辑弹窗样式 --- */
 .modal-overlay.edit-modal {
   z-index: 1500;
 }
 
 .modal-box.edit-modal-box {
-  max-width: 680px;
+  max-width: 760px;
 }
 
 .edit-modal-box .modal-header {
@@ -1570,7 +1631,7 @@ textarea {
 
 .edit-modal-box .modal-body {
   padding: 28px;
-  max-height: 70vh;
+  max-height: 80vh;
   overflow-y: auto;
   background: var(--color-surface);
 }
@@ -1747,12 +1808,14 @@ textarea {
  * 这使得意外拖入子列表的难度增加
  */
 .child-list.sortable-ghost {
-  min-height: 30px; /* <-- 原为 50px */
+  min-height: 30px;
+  /* <-- 原为 50px */
   background: #f0f5ff;
   border: 2px dashed var(--color-primary);
   border-radius: 8px;
 }
-.child-list.sortable-ghost > * {
+
+.child-list.sortable-ghost>* {
   visibility: hidden;
 }
 
@@ -1761,13 +1824,16 @@ textarea {
   opacity: 0;
   transform: scale(0.9);
 }
+
 .server-list-anim-root-enter-active,
 .server-list-anim-root-leave-active {
   transition: all 0.3s ease;
 }
+
 .server-list-anim-root-move {
   transition: transform 0.3s cubic-bezier(0.55, 0, 0.1, 1);
 }
+
 .server-item-container.sortable-ghost {
   background: #f0f5ff;
   border: 2px dashed var(--color-primary);
@@ -1775,7 +1841,8 @@ textarea {
   border-radius: 8px;
   min-height: 50px;
 }
-.server-item-container.sortable-ghost > * {
+
+.server-item-container.sortable-ghost>* {
   visibility: hidden;
 }
 
@@ -1783,13 +1850,14 @@ textarea {
 .server-list-anim-child-leave-active {
   transition: all 0.3s ease;
 }
+
 .server-list-anim-child-enter-from,
 .server-list-anim-child-leave-to {
   opacity: 0;
   transform: translateX(30px);
 }
+
 .server-list-anim-child-move {
   transition: transform 0.3s ease;
 }
-
 </style>
