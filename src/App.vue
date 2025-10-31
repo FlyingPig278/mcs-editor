@@ -81,6 +81,12 @@ const currentServerData = ref(null)     // 存储正在添加/编辑的服务器
 const editingServerIp = ref(null)       // 存储原始 IP，用于编辑时的唯一性检验
 const alertModalRef = ref(null)         // Alert/Confirm 弹窗容器
 const serverModalRef = ref(null)        // 服务器编辑弹窗容器
+const isParentSelectOpen = ref(false)
+const parentSelectTriggerRef = ref(null) // 触发器按钮
+const parentSelectOptionsRef = ref(null) // 选项列表
+const isPresetSelectOpen = ref(false)
+const presetSelectTriggerRef = ref(null)
+const presetSelectOptionsRef = ref(null)
 let cancelModalTimeout = null           // 统一的弹窗清理句柄
 
 const modalIds = {
@@ -141,12 +147,38 @@ function handleGlobalKeydown(event) {
     if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
       event.preventDefault()
       onModalCancel()
-    } else if (isServerModalVisible.value) {
+    }
+    // --- (v17.2 新增) 其次检查预设下拉框 ---
+    else if (isPresetSelectOpen.value) {
+      event.preventDefault()
+      isPresetSelectOpen.value = false
+      presetSelectTriggerRef.value?.focus()
+    }
+    // --- 结束 ---
+    else if (isParentSelectOpen.value) { // (v17) 其次检查父服下拉框
+      event.preventDefault()
+      isParentSelectOpen.value = false
+      parentSelectTriggerRef.value?.focus() // 焦点返回触发器
+    }
+    else if (isServerModalVisible.value) {
       event.preventDefault()
       closeServerModal()
     }
   } else if (event.key === 'Tab') {
-    if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
+    // --- (v17.2 新增) ---
+    if (isPresetSelectOpen.value) {
+      isPresetSelectOpen.value = false
+      // 让 trapFocus 继续工作
+      trapFocus(event, serverModalRef)
+    }
+    // --- (v17) 如果下拉框打开，Tab键应关闭它 ---
+    else if (isParentSelectOpen.value) {
+      isParentSelectOpen.value = false
+      // 让 trapFocus 继续工作
+      trapFocus(event, serverModalRef)
+    }
+    // --- 结束 ---
+    else if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
       trapFocus(event, alertModalRef)
     } else if (isServerModalVisible.value) {
       trapFocus(event, serverModalRef)
@@ -177,6 +209,26 @@ const outputJson = computed(() => {
     })
   }
   return JSON.stringify(cleanConfig, null, 2)
+})
+
+/**
+ * @description (v17) 计算当前选中的父服务器对象，用于自定义下拉框显示
+ */
+const selectedParent = computed(() => {
+  if (!currentServerData.value || !currentServerData.value.parent_ip) {
+    return null
+  }
+  return potentialParentServers.value.find(p => p.ip === currentServerData.value.parent_ip)
+})
+
+/**
+ * @description (v17.2) 计算当前选中的预设对象，用于自定义下拉框显示
+ */
+const selectedPresetObject = computed(() => {
+  if (!currentServerData.value || !currentServerData.value.selectedPreset) {
+    return null
+  }
+  return presets[currentServerData.value.selectedPreset]
 })
 
 // --- 6. 方法 (Methods) ---
@@ -343,6 +395,20 @@ function saveServer() {
   // 应用更改
   if (modalMode.value === 'edit') {
     // --- 编辑模式 ---
+
+    // --- (新增) v17 需求 1: 同步更新子服的 parent_ip ---
+    const ipChanged = newIp !== editingServerIp.value;
+    if (ipChanged) {
+      // 遍历整个服务器列表
+      config.value.servers.forEach(s => {
+        // 如果有子服的 parent_ip 指向旧 IP
+        if (s.parent_ip === editingServerIp.value) {
+          // 将它更新为新 IP
+          s.parent_ip = newIp;
+        }
+      });
+    }
+
     // 找到原始服务器对象
     const originalServer = config.value.servers.find(s => s.ip === editingServerIp.value);
     if (originalServer) {
@@ -357,6 +423,90 @@ function saveServer() {
 
   closeServerModal() // 关闭弹窗并清理
 }
+
+/**
+ * @description 切换父服务器下拉框的显示
+ */
+function toggleParentSelect() {
+  isParentSelectOpen.value = !isParentSelectOpen.value
+}
+
+/**
+ * @description 选择一个新的父服务器
+ */
+function selectParent(parentIp) {
+  if (currentServerData.value) {
+    currentServerData.value.parent_ip = parentIp
+  }
+  isParentSelectOpen.value = false
+  // 将焦点返回给触发器按钮
+  parentSelectTriggerRef.value?.focus()
+}
+
+/**
+ * @description (v17) 处理点击外部以关闭自定义下拉框
+ */
+function handleClickOutsideParentSelect(event) {
+  if (
+    isParentSelectOpen.value &&
+    parentSelectTriggerRef.value && !parentSelectTriggerRef.value.contains(event.target) &&
+    parentSelectOptionsRef.value && !parentSelectOptionsRef.value.contains(event.target)
+  ) {
+    isParentSelectOpen.value = false
+  }
+}
+
+/**
+ * @description 切换快捷预设下拉框的显示
+ */
+function togglePresetSelect() {
+  isPresetSelectOpen.value = !isPresetSelectOpen.value
+}
+
+/**
+ * @description 选择一个新的预设
+ */
+function selectPreset(presetKey) {
+  if (currentServerData.value) {
+    currentServerData.value.selectedPreset = presetKey
+    // 关键: 选择后要立即应用 (applyPreset 会处理空 key)
+    applyPreset(currentServerData.value)
+  }
+  isPresetSelectOpen.value = false
+  presetSelectTriggerRef.value?.focus()
+}
+
+/**
+ * @description (v17.2) 处理点击外部以关闭快捷预设下拉框
+ */
+function handleClickOutsidePresetSelect(event) {
+  if (
+    isPresetSelectOpen.value &&
+    presetSelectTriggerRef.value && !presetSelectTriggerRef.value.contains(event.target) &&
+    presetSelectOptionsRef.value && !presetSelectOptionsRef.value.contains(event.target)
+  ) {
+    isPresetSelectOpen.value = false
+  }
+}
+
+// 监听下拉框状态，动态添加/移除全局点击监听
+watch(isParentSelectOpen, (isOpen) => {
+  if (isOpen) {
+    // 使用 mousedown 而非 click，以便在点击事件触发前关闭
+    document.addEventListener('mousedown', handleClickOutsideParentSelect)
+  } else {
+    document.removeEventListener('mousedown', handleClickOutsideParentSelect)
+  }
+})
+
+// (v17.2) 监听预设下拉框状态
+watch(isPresetSelectOpen, (isOpen) => {
+  if (isOpen) {
+    document.addEventListener('mousedown', handleClickOutsidePresetSelect)
+  } else {
+    document.removeEventListener('mousedown', handleClickOutsidePresetSelect)
+  }
+})
 
 
 // --- (C) 辅助函数 (Helpers) ---
@@ -686,6 +836,8 @@ onMounted(async () => {
 
 onBeforeUnmount(() => {
   document.removeEventListener('keydown', handleGlobalKeydown);
+  document.removeEventListener('mousedown', handleClickOutsideParentSelect);
+  document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
 });
 
 // (v16 建议 5) 移除末尾的 parseAndSetConfig(defaultJsonString)
@@ -742,11 +894,11 @@ onBeforeUnmount(() => {
                 }">
                   <div class="drag-handle">⠿</div>
                   <div class="simple-info">
-                    <span class="simple-tag" :style="{
+                    <span v-if="server.tag" class="simple-tag" :style="{
                       backgroundColor: server.tag_color_with_hash,
                       color: getContrastColor(server.tag_color_with_hash)
                     }">
-                      {{ server.tag || '无标签' }}
+                      {{ server.tag }}
                     </span>
                     <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
                     <span class="simple-ip" :class="{ 'with-comment': server.comment }">
@@ -772,11 +924,11 @@ onBeforeUnmount(() => {
                     }">
                       <div class="drag-handle">⠿</div>
                       <div class="simple-info">
-                        <span class="simple-tag" :style="{
+                        <span v-if="childServer.tag" class="simple-tag" :style="{
                           backgroundColor: childServer.tag_color_with_hash,
                           color: getContrastColor(childServer.tag_color_with_hash)
                         }">
-                          {{ childServer.tag || '无标签' }}
+                          {{ childServer.tag }}
                         </span>
                         <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
                         <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
@@ -893,13 +1045,46 @@ onBeforeUnmount(() => {
 
                 <div class="form-group" style="flex-grow: 1;">
                   <label>快捷预设</label>
-                  <div class="select-wrapper">
-                    <select v-model="currentServerData.selectedPreset" @change="applyPreset(currentServerData)">
-                      <option value="">-- 自定义 --</option>
-                      <option v-for="(preset, key) in presets" :key="key" :value="key">
-                        {{ preset.tag }}
-                      </option>
-                    </select>
+                  <div class="custom-select-container">
+
+                    <button type="button" class="custom-select-trigger" ref="presetSelectTriggerRef"
+                      @click="togglePresetSelect" aria-haspopup="listbox" :aria-expanded="isPresetSelectOpen">
+
+                      <span v-if="selectedPresetObject" class="selected-option-content">
+                        <span class="simple-tag-small" :style="{
+                          backgroundColor: selectedPresetObject.tag_color_with_hash,
+                          color: getContrastColor(selectedPresetObject.tag_color_with_hash)
+                        }">{{ selectedPresetObject.tag }}</span>
+                        <span class="option-text">{{ selectedPresetObject.tag }}</span>
+                      </span>
+                      <span v-else class="option-placeholder">-- 自定义 --</span>
+
+                      <span class="custom-select-arrow" :class="{ 'is-open': isPresetSelectOpen }">▼</span>
+                    </button>
+
+                    <transition name="modal-fade">
+                      <ul v-if="isPresetSelectOpen" class="custom-select-options" ref="presetSelectOptionsRef"
+                        role="listbox">
+
+                        <li class="custom-select-option" :class="{ 'is-selected': !currentServerData.selectedPreset }"
+                          @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
+                          <span class="option-placeholder">-- 自定义 --</span>
+                        </li>
+
+                        <li v-for="(preset, key) in presets" :key="key" class="custom-select-option" :class="{
+                          'is-selected': currentServerData.selectedPreset === key
+                        }" @click="selectPreset(key)" role="option"
+                          :aria-selected="currentServerData.selectedPreset === key">
+
+                          <span class="simple-tag-small" :style="{
+                            backgroundColor: preset.tag_color_with_hash,
+                            color: getContrastColor(preset.tag_color_with_hash)
+                          }">{{ preset.tag }}</span>
+
+                          <span class="option-text">{{ preset.tag }}</span>
+                        </li>
+                      </ul>
+                    </transition>
                   </div>
                 </div>
 
@@ -912,17 +1097,59 @@ onBeforeUnmount(() => {
               <div class="form-row">
                 <div class="form-group grow">
                   <label>父服务器 (Parent IP)</label>
-                  <div class="select-wrapper">
-                    <select v-model="currentServerData.parent_ip" :disabled="(modalMode === 'edit' && currentServerData.children && currentServerData.children.length > 0) ||
-                      potentialParentServers.length === 0 ||
-                      (modalMode === 'add' && currentServerData.parent_ip)
-                      ">
-                      <option value="">-- 默认为根服务器 --</option>
-                      <option v-for="parent in potentialParentServers" :key="parent.ip" :value="parent.ip"
-                        :disabled="parent.ip === editingServerIp">
-                        [{{ serverTypeLabels[parent.server_type] || '服务器' }}] {{ parent.tag || parent.ip }}
-                      </option>
-                    </select>
+                  <div class="custom-select-container">
+
+                    <button type="button" class="custom-select-trigger" ref="parentSelectTriggerRef"
+                      @click="toggleParentSelect" :disabled="(modalMode === 'edit' && currentServerData.children && currentServerData.children.length > 0) ||
+                        (potentialParentServers.length === 0 && modalMode === 'edit')
+                        " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen">
+
+                      <span v-if="selectedParent" class="selected-option-content">
+                        <span v-if="selectedParent.tag" class="simple-tag-small" :style="{
+                          backgroundColor: selectedParent.tag_color_with_hash,
+                          color: getContrastColor(selectedParent.tag_color_with_hash)
+                        }">{{ selectedParent.tag }}</span>
+                        <span class="option-text">
+                          <template v-if="selectedParent.comment">{{ selectedParent.comment }} ({{ selectedParent.ip
+                          }})</template>
+                          <template v-else>{{ selectedParent.ip }}</template>
+                        </span>
+                      </span>
+                      <span v-else class="option-placeholder">-- 默认为根服务器 --</span>
+
+                      <span class="custom-select-arrow" :class="{ 'is-open': isParentSelectOpen }">▼</span>
+                    </button>
+
+                    <transition name="modal-fade">
+                      <ul v-if="isParentSelectOpen" class="custom-select-options is-parent-select"
+                        ref="parentSelectOptionsRef" role="listbox">
+
+                        <li class="custom-select-option" :class="{ 'is-selected': !currentServerData.parent_ip }"
+                          @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
+                          <span class="option-placeholder">-- 默认为根服务器 --</span>
+                        </li>
+
+                        <li v-for="parent in potentialParentServers" :key="parent.ip" class="custom-select-option"
+                          :class="{
+                            'is-selected': currentServerData.parent_ip === parent.ip,
+                            'is-disabled': parent.ip === editingServerIp
+                          }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)" role="option"
+                          :aria-selected="currentServerData.parent_ip === parent.ip"
+                          :aria-disabled="parent.ip === editingServerIp">
+
+                          <span v-if="parent.tag" class="simple-tag-small" :style="{
+                            backgroundColor: parent.tag_color_with_hash,
+                            color: getContrastColor(parent.tag_color_with_hash)
+                          }">{{ parent.tag }}</span>
+
+                          <span class="option-text">
+                            <template v-if="parent.comment">{{ parent.comment }} ({{ parent.ip }})</template>
+                            <template v-else>{{ parent.ip }}</template>
+                          </span>
+                        </li>
+                      </ul>
+                    </transition>
+
                   </div>
                   <p v-if="potentialParentServers.length === 0 && modalMode === 'add'" class="form-help-text">
                     当前没有可用的父服务器，将作为根服务器添加。
@@ -1797,6 +2024,7 @@ textarea {
   max-height: 80vh;
   overflow-y: auto;
   background: var(--color-surface);
+  scrollbar-gutter: stable;
 }
 
 .server-form {
@@ -2072,5 +2300,220 @@ textarea {
 .server-form .form-compound-input-color:focus {
   outline: none;
   box-shadow: none;
+}
+
+.custom-select-container {
+  position: relative;
+  width: 100%;
+}
+
+.custom-select-trigger {
+  /* 模拟 .server-form input[type="text"] 样式 */
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+
+  /* 按钮特定样式 */
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  text-align: left;
+  cursor: pointer;
+  font-size: 0.95rem;
+  /* 匹配 input */
+  color: var(--color-text-primary);
+  /* 匹配 input */
+
+  /* 模拟 :focus 样式 */
+  outline: none;
+
+  /* 模拟 input padding-left: 26px (已由 ::before 伪元素占用) */
+  padding-left: 26px;
+}
+
+.custom-select-trigger:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
+}
+
+.custom-select-trigger:disabled {
+  background-color: var(--color-surface-muted);
+  color: var(--color-text-secondary);
+  cursor: not-allowed;
+  opacity: 0.7;
+}
+
+/* 触发器内部布局 */
+.selected-option-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  /* 关键：防止内容溢出 */
+}
+
+.option-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.option-placeholder {
+  color: var(--color-text-secondary);
+  opacity: 0.8;
+}
+
+.custom-select-arrow {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  transition: transform 0.2s ease;
+  transform-origin: center;
+  margin-left: 8px;
+  /* 增加一点间距 */
+  flex-shrink: 0;
+}
+
+.custom-select-arrow.is-open {
+  transform: rotate(180deg);
+}
+
+/* 选项列表 */
+.custom-select-options {
+  position: absolute;
+  top: 105%;
+  /* 紧贴在触发器下方 */
+  left: 0;
+  right: 0;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  box-shadow: var(--shadow-soft);
+  z-index: 1600;
+  /* 必须高于 modal-body (1500) */
+  max-height: 200px;
+  overflow-y: auto;
+  list-style: none;
+  padding: 5px;
+  margin: 0;
+  overscroll-behavior-y: contain;
+}
+
+/* 单个选项 */
+.custom-select-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  /* 确保内容不溢出 */
+}
+
+.custom-select-option:hover {
+  background: var(--color-surface-muted);
+}
+
+.custom-select-option.is-selected {
+  background: var(--color-body-gradient-start);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+.custom-select-option.is-disabled {
+  color: var(--color-text-secondary);
+  opacity: 0.6;
+  cursor: not-allowed;
+  background: transparent;
+}
+
+.custom-select-option.is-disabled:hover {
+  background: transparent;
+}
+
+/* 内部小标签 (用于触发器和选项) */
+.simple-tag-small {
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
+  /* 防止标签被压缩 */
+  /* 其他样式 (背景色/颜色) 由内联 :style 提供 */
+}
+
+.custom-select-options.is-parent-select {
+  top: auto;
+  bottom: 105%;
+  box-shadow: var(--shadow-soft);
+  /* (可选) 确保阴影在上方也好看 */
+}
+
+/* --- (v17.4) 1. 自定义夜间模式滚动条 --- */
+html.dark-mode {
+  /* 适用于 Firefox */
+  scrollbar-color: #6b7280 #374151;
+  scrollbar-width: thin;
+}
+
+html.dark-mode ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+html.dark-mode ::-webkit-scrollbar-track {
+  background: var(--color-surface-muted);
+  /* 滚动条轨道背景 */
+  border-radius: 4px;
+}
+
+html.dark-mode ::-webkit-scrollbar-thumb {
+  background-color: #6b7280;
+  /* 滚动条滑块 */
+  border-radius: 4px;
+  /* (可选) 创建一个“内边距”效果，让滑块看起来更细 */
+  border: 2px solid var(--color-surface-muted);
+}
+
+html.dark-mode ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-secondary);
+  /* 悬停时变亮 */
+}
+
+/* --- (v17.4) 1. 自定义夜间模式滚动条 --- */
+html.dark-mode {
+  /* 适用于 Firefox */
+  scrollbar-color: #6b7280 #374151;
+  scrollbar-width: thin;
+}
+
+html.dark-mode ::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+html.dark-mode ::-webkit-scrollbar-track {
+  background: var(--color-surface-muted);
+  /* 滚动条轨道背景 */
+  border-radius: 4px;
+}
+
+html.dark-mode ::-webkit-scrollbar-thumb {
+  background-color: #6b7280;
+  /* 滚动条滑块 */
+  border-radius: 4px;
+  /* (可选) 创建一个“内边距”效果，让滑块看起来更细 */
+  border: 2px solid var(--color-surface-muted);
+}
+
+html.dark-mode ::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-text-secondary);
+  /* 悬停时变亮 */
 }
 </style>
