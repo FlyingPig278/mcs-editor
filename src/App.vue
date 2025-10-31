@@ -2,7 +2,22 @@
 // --- 1. 导入依赖 ---
 import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import draggable from 'vuedraggable'
-
+import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
+import {
+  faSun,
+  faMoon,
+  faPlusCircle,
+  faEdit,
+  faTimes,
+  faEyeSlash,
+  faSave,
+  faPlus,
+  faTrash,
+  faUpload,    // <-- (v17.15) 新增
+  faClipboard  // <-- (v17.15) 新增
+} from '@fortawesome/free-solid-svg-icons'
+import { ColorPicker } from 'vue3-colorpicker'
+import 'vue3-colorpicker/style.css'
 // --- 2. 静态配置数据 ---
 
 /**
@@ -87,6 +102,9 @@ const parentSelectOptionsRef = ref(null) // 选项列表
 const isPresetSelectOpen = ref(false)
 const presetSelectTriggerRef = ref(null)
 const presetSelectOptionsRef = ref(null)
+const isColorPickerOpen = ref(false)
+const colorPickerTriggerRef = ref(null)
+const colorPickerPanelRef = ref(null)
 let cancelModalTimeout = null           // 统一的弹窗清理句柄
 
 const modalIds = {
@@ -148,13 +166,18 @@ function handleGlobalKeydown(event) {
       event.preventDefault()
       onModalCancel()
     }
-    // --- (v17.2 新增) 其次检查预设下拉框 ---
-    else if (isPresetSelectOpen.value) {
+    // --- (v17.7 新增) 其次检查颜色选择器 ---
+    else if (isColorPickerOpen.value) {
+      event.preventDefault()
+      isColorPickerOpen.value = false
+      colorPickerTriggerRef.value?.focus()
+    }
+    // --- 结束 ---
+    else if (isPresetSelectOpen.value) { // (v17.2) 其次检查预设下拉框
       event.preventDefault()
       isPresetSelectOpen.value = false
       presetSelectTriggerRef.value?.focus()
     }
-    // --- 结束 ---
     else if (isParentSelectOpen.value) { // (v17) 其次检查父服下拉框
       event.preventDefault()
       isParentSelectOpen.value = false
@@ -165,20 +188,21 @@ function handleGlobalKeydown(event) {
       closeServerModal()
     }
   } else if (event.key === 'Tab') {
-    // --- (v17.2 新增) ---
-    if (isPresetSelectOpen.value) {
-      isPresetSelectOpen.value = false
-      // 让 trapFocus 继续工作
-      trapFocus(event, serverModalRef)
-    }
-    // --- (v17) 如果下拉框打开，Tab键应关闭它 ---
-    else if (isParentSelectOpen.value) {
-      isParentSelectOpen.value = false
-      // 让 trapFocus 继续工作
+    // --- (v17.7 新增) ---
+    if (isColorPickerOpen.value) {
+      isColorPickerOpen.value = false
       trapFocus(event, serverModalRef)
     }
     // --- 结束 ---
-    else if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
+    else if (isPresetSelectOpen.value) {
+      isPresetSelectOpen.value = false
+      trapFocus(event, serverModalRef)
+    }
+    else if (isParentSelectOpen.value) {
+      isParentSelectOpen.value = false
+      trapFocus(event, serverModalRef)
+    }
+    else if (isModalVisible.value) {
       trapFocus(event, alertModalRef)
     } else if (isServerModalVisible.value) {
       trapFocus(event, serverModalRef)
@@ -498,6 +522,22 @@ watch(isParentSelectOpen, (isOpen) => {
     document.removeEventListener('mousedown', handleClickOutsideParentSelect)
   }
 })
+
+/**
+ * @description (v17.7) 切换颜色选择器
+ */
+function toggleColorPicker() {
+  isColorPickerOpen.value = !isColorPickerOpen.value
+}
+
+/**
+ * @description (v17.10) 新增：用于关闭颜色模态框
+ */
+function closeColorPicker() {
+  isColorPickerOpen.value = false
+  colorPickerTriggerRef.value?.focus() // 焦点返回
+}
+
 
 // (v17.2) 监听预设下拉框状态
 watch(isPresetSelectOpen, (isOpen) => {
@@ -851,8 +891,8 @@ onBeforeUnmount(() => {
       <header class="panel-header">
 
         <button @click="toggleTheme" class="theme-toggle-btn" :title="isDarkMode ? '切换到日间模式' : '切换到夜间模式'">
-          <i v-if="isDarkMode" class="fas fa-sun"></i>
-          <i v-else class="fas fa-moon"></i>
+          <font-awesome-icon v-if="isDarkMode" :icon="faSun" />
+          <font-awesome-icon v-else :icon="faMoon" />
         </button>
         <h1>服务器配置编辑器</h1>
         <div class="subtitle">拖拽服务器卡片调整优先级</div>
@@ -872,7 +912,7 @@ onBeforeUnmount(() => {
             <h3>服务器列表</h3>
             <div class="header-actions">
               <button @click="removeAllServers" class="btn btn-danger" v-if="config.servers.length > 0">
-                🗑️ 全部删除
+                <font-awesome-icon :icon="faTrash" /> 全部删除
               </button>
               <button @click="addServer" class="btn btn-add">
                 + 添加服务器
@@ -907,11 +947,17 @@ onBeforeUnmount(() => {
                     <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                   </div>
                   <div class="simple-actions">
-                    <button @click="addChildServer(server)" class="btn btn-add-child-simple">
-                      + 子服
+                    <button @click="addChildServer(server)" class="btn btn-add-child-simple btn-icon-simple"
+                      title="添加子服务器">
+                      <font-awesome-icon :icon="faPlus" />
                     </button>
-                    <button @click="openServerModal(server)" class="btn btn-edit-simple">编辑</button>
-                    <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple">×</button>
+                    <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple" title="编辑服务器">
+                      <font-awesome-icon :icon="faEdit" />
+                    </button>
+                    <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple btn-icon-simple"
+                      title="删除服务器">
+                      <font-awesome-icon :icon="faTrash" />
+                    </button>
                   </div>
                 </div>
 
@@ -931,14 +977,22 @@ onBeforeUnmount(() => {
                           {{ childServer.tag }}
                         </span>
                         <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
-                        <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
-                          {{ childServer.comment ? '(' + childServer.ip + ')' : childServer.ip }}
-                        </span>
-                        <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                        <div class="simple-info-line2">
+                          <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
+                            {{ childServer.comment ? '(' + childServer.ip + ')' : childServer.ip }}
+                          </span>
+                          <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                        </div>
                       </div>
                       <div class="simple-actions">
-                        <button @click="openServerModal(childServer)" class="btn btn-edit-simple">编辑</button>
-                        <button @click="removeServer(childServer)" class="btn btn-danger btn-remove-simple">×</button>
+                        <button @click="openServerModal(childServer)" class="btn btn-edit-simple btn-icon-simple"
+                          title="编辑服务器">
+                          <font-awesome-icon :icon="faEdit" />
+                        </button>
+                        <button @click="removeServer(childServer)"
+                          class="btn btn-danger btn-remove-simple btn-icon-simple" title="删除服务器">
+                          <font-awesome-icon :icon="faTrash" />
+                        </button>
                       </div>
                     </div>
                   </template>
@@ -963,7 +1017,9 @@ onBeforeUnmount(() => {
           <div class="form-group">
             <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴 JSON..."></textarea>
           </div>
-          <button @click="loadConfig" class="btn btn-primary">加载配置</button>
+          <button @click="loadConfig" class="btn btn-primary">
+            <font-awesome-icon :icon="faUpload" /> 加载配置
+          </button>
         </div>
 
         <div class="form-section">
@@ -972,7 +1028,9 @@ onBeforeUnmount(() => {
           <div class="form-group">
             <textarea :value="outputJson" rows="15" readonly></textarea>
           </div>
-          <button @click="copyToClipboard" class="btn btn-secondary">复制到剪贴板</button>
+          <button @click="copyToClipboard" class="btn btn-secondary">
+            <font-awesome-icon :icon="faClipboard" /> 复制到剪贴板
+          </button>
         </div>
       </div>
     </div>
@@ -1005,13 +1063,13 @@ onBeforeUnmount(() => {
 
           <div class="modal-header">
             <h3 v-if="modalMode === 'add'" :id="modalIds.serverTitle">
-              <i class="fas fa-plus-circle"></i> 添加新服务器
+              <font-awesome-icon :icon="faPlusCircle" /> 添加新服务器
             </h3>
             <h3 v-else :id="modalIds.serverTitle">
-              <i class="fas fa-edit"></i> 编辑服务器 {{ editingServerIp }}
+              <font-awesome-icon :icon="faEdit" /> 编辑服务器 {{ editingServerIp }}
             </h3>
             <button @click="closeServerModal" class="btn-close-modal" type="button">
-              <i class="fas fa-times"></i>
+              <font-awesome-icon :icon="faTimes" />
             </button>
           </div>
 
@@ -1038,8 +1096,28 @@ onBeforeUnmount(() => {
                   <div class="form-compound-input">
                     <input type="text" v-model="currentServerData.tag" @input="checkIfCustom(currentServerData)"
                       placeholder="留空则不显示" class="form-compound-input-text" />
-                    <input type="color" v-model="currentServerData.tag_color_with_hash"
-                      @input="onColorInput(currentServerData)" class="color-picker form-compound-input-color" />
+
+                    <div class="color-picker-wrapper">
+                      <button type="button" class="custom-color-trigger" ref="colorPickerTriggerRef"
+                        :style="{ backgroundColor: currentServerData.tag_color_with_hash }"
+                        @click.stop="toggleColorPicker">
+                      </button>
+
+                      <transition name="modal-fade">
+                        <div v-if="isColorPickerOpen" class="color-picker-modal-overlay" @click.self="closeColorPicker"
+                          role="presentation">
+                          <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog" aria-modal="true">
+                            <ColorPicker is-widget format="hex" :disable-alpha="true"
+                              v-model:pureColor="currentServerData.tag_color_with_hash"
+                              @pureColorChange="onColorInput(currentServerData)" />
+                            <button type="button" class="btn btn-modal-confirm btn-color-picker-done"
+                              @click="closeColorPicker">
+                              完成
+                            </button>
+                          </div>
+                        </div>
+                      </transition>
+                    </div>
                   </div>
                 </div>
 
@@ -1101,7 +1179,7 @@ onBeforeUnmount(() => {
 
                     <button type="button" class="custom-select-trigger" ref="parentSelectTriggerRef"
                       @click="toggleParentSelect" :disabled="(modalMode === 'edit' && currentServerData.children && currentServerData.children.length > 0) ||
-                        (potentialParentServers.length === 0 && modalMode === 'edit')
+                        (potentialParentServers.length === 0)
                         " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen">
 
                       <span v-if="selectedParent" class="selected-option-content">
@@ -1162,7 +1240,7 @@ onBeforeUnmount(() => {
                   <input type="checkbox" v-model="currentServerData.ignore_in_list"
                     :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')" class="styled-checkbox" />
                   <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">
-                    <i class="fas fa-eye-slash"></i> 在列表中隐藏 (ignore_in_list)
+                    <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏 (ignore_in_list)
                   </label>
                 </div>
               </div>
@@ -1172,10 +1250,10 @@ onBeforeUnmount(() => {
 
           <div class="modal-footer">
             <button @click="closeServerModal" class="btn-modal-cancel" type="button">
-              <i class="fas fa-times"></i> 取消
+              <font-awesome-icon :icon="faTimes" /> 取消
             </button>
             <button @click="saveServer" class="btn-modal-confirm" type="button">
-              <i class="fas fa-save"></i> {{ modalMode === 'add' ? '确认添加' : '保存更改' }}
+              <font-awesome-icon :icon="faSave" /> {{ modalMode === 'add' ? '确认添加' : '保存更改' }}
             </button>
           </div>
 
@@ -1187,8 +1265,6 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
-@import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css");
-
 /* --- (新增) 夜间模式 --- */
 
 /* 1. 夜间模式的颜色变量 (覆盖 :root) */
@@ -1215,14 +1291,18 @@ html.dark-mode {
   --color-border: #4b5563;
   /* 深色边框 */
 
-  --color-primary: #6366f1;
-  /* 保持不变 */
-  --color-primary-hover: #4f46e5;
-  --color-secondary: #3b82f6;
-  /* 调亮一点的蓝 */
-  --color-secondary-hover: #2563eb;
+  /* --- (v17.15) 提高对比度 --- */
+  --color-primary: #818cf8;
+  /* (原: #6366f1) 变亮 */
+  --color-primary-hover: #6366f1;
+  /* (原: #4f46e5) 使用旧的默认色 */
+  --color-secondary: #60a5fa;
+  /* (原: #3b82f6) 变亮 */
+  --color-secondary-hover: #3b82f6;
+  /* (原: #2563eb) 使用旧的默认色 */
 
-  --color-focus-outline: rgba(99, 102, 241, 0.55);
+  --color-focus-outline: rgba(129, 140, 248, 0.55);
+  /* (v17.15) 匹配新的主色 */
   /* 提高不透明度 */
 
   --shadow-soft: 0 10px 20px rgba(0, 0, 0, 0.2);
@@ -1665,12 +1745,10 @@ textarea {
 }
 
 .server-item-simple.is-parent {
-  background: var(--color-surface-muted);
   border-left: 4px solid var(--color-panel-gradient-start);
 }
 
 .server-item-simple.is-ignored {
-  background: var(--color-surface-muted);
   opacity: 0.7;
 }
 
@@ -1736,9 +1814,6 @@ textarea {
   background: var(--color-surface-muted);
   color: var(--color-primary);
   border: 1px solid var(--color-border);
-  padding: 6px 12px;
-  font-size: 0.85rem;
-  border-radius: 8px;
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
 
@@ -1747,52 +1822,20 @@ textarea {
   background: var(--color-body-gradient-start);
   border-color: var(--color-primary);
   color: var(--color-primary);
-  transform: none;
-  box-shadow: none;
 }
 
-/* 找到并替换这个规则 */
 .btn-edit-simple {
   background: var(--color-surface-muted);
-  /* (新) */
   color: var(--color-primary);
-  /* (新) */
+  /* (v17.13) 保持颜色 */
   border: 1px solid var(--color-border);
-  /* (新) */
-  padding: 6px 12px;
-  font-size: 0.85rem;
-  border-radius: 8px;
-  /* (新) */
   transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-  /* (新) */
 }
 
-/* 找到并替换这个规则 */
-.btn-edit-simple:hover {
+.btn-edit-simple:hover,
+.btn-edit-simple:focus-visible {
   background: var(--color-body-gradient-start);
-  /* (新) */
   border-color: var(--color-primary);
-  /* (新) */
-  transform: none;
-  box-shadow: none;
-}
-
-.btn-remove-simple {
-  background: transparent;
-  color: var(--color-danger);
-  /* (修正) */
-  font-size: 1.2rem;
-  padding: 5px;
-  line-height: 1;
-}
-
-.btn-remove-simple:hover {
-  background-color: var(--color-surface-muted);
-  /* (修正) */
-  color: var(--color-danger-hover);
-  /* (修正) */
-  transform: none;
-  box-shadow: none;
 }
 
 .drag-handle {
@@ -1983,6 +2026,16 @@ textarea {
 
 .modal-box.edit-modal-box {
   max-width: 760px;
+
+  /* --- (v17.11) 新增：flex 布局 --- */
+  display: flex;
+  flex-direction: column;
+
+  /* * 1. 使用 90dvh (动态视口高度) 来适应手机工具栏
+   * 2. 90vh 是为不支持 dvh 的旧浏览器的后备 
+   */
+  max-height: 90vh;
+  max-height: 90dvh;
 }
 
 .edit-modal-box .modal-header {
@@ -1993,6 +2046,7 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  flex-shrink: 0;
 }
 
 .edit-modal-box .modal-header h3 {
@@ -2021,10 +2075,12 @@ textarea {
 
 .edit-modal-box .modal-body {
   padding: 28px;
-  max-height: 80vh;
   overflow-y: auto;
   background: var(--color-surface);
   scrollbar-gutter: stable;
+
+  flex-grow: 1;
+  min-height: 0;
 }
 
 .server-form {
@@ -2069,6 +2125,10 @@ textarea {
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
   padding-left: 26px;
   color: var(--color-text-primary);
+  position: relative;
+  /* <-- (v17.13) 新增 */
+  z-index: 1;
+  /* <-- (v17.13) 新增 */
 }
 
 .server-form input[type="text"]:focus,
@@ -2137,6 +2197,7 @@ textarea {
   padding: 18px 28px;
   background: var(--color-surface-muted);
   border-top: 1px solid var(--color-border);
+  flex-shrink: 0;
 }
 
 .server-form .form-group::before {
@@ -2149,6 +2210,7 @@ textarea {
   background: linear-gradient(to bottom, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
   border-radius: 2px;
   opacity: 0.6;
+  z-index: 2;
 }
 
 .server-form .form-group:has(> .color-picker)::before,
@@ -2333,6 +2395,10 @@ textarea {
 
   /* 模拟 input padding-left: 26px (已由 ::before 伪元素占用) */
   padding-left: 26px;
+  position: relative;
+  /* <-- (v17.13) 新增 */
+  z-index: 1;
+  /* <-- (v17.13) 新增 */
 }
 
 .custom-select-trigger:focus-visible {
@@ -2515,5 +2581,279 @@ html.dark-mode ::-webkit-scrollbar-thumb {
 html.dark-mode ::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-text-secondary);
   /* 悬停时变亮 */
+}
+
+/* --- (v17.6) 微调 Font Awesome SVG 图标对齐 --- */
+
+/* * 目标：按钮和标签中的图标
+ * 作用：确保图标与旁边的文本垂直居中 
+ */
+.btn svg,
+.btn-modal-cancel svg,
+.btn-modal-confirm svg,
+.form-group-checkbox label svg,
+.modal-header h3 svg {
+  /* * 这是一个魔法数字，用于将 SVG 稍微向下移动一点
+   * 使其在视觉上与文本的“中线”对齐 
+   */
+  vertical-align: -0.125em;
+
+  /* (可选) 如果图标和文本贴得太近，请取消注释此行 */
+  /* margin-right: 0.3em; */
+}
+
+/* * 目标：单独的图标 (例如夜间模式、关闭按钮) 
+ * 作用：确保它们正确地填充其容器 
+ */
+.theme-toggle-btn svg,
+.btn-close-modal svg {
+  vertical-align: middle;
+}
+
+/* --- (v17.7) 自定义颜色选择器样式 --- */
+.color-picker-wrapper {
+  /* * 1. 模拟 .form-compound-input-color 的大小和位置 
+   * (flex: 0 0 auto; width: 44px; height: 44px; margin: 2px;)
+   */
+  flex: 0 0 auto;
+  position: relative;
+  width: 44px;
+  height: 44px;
+  margin: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1;
+  /* <-- (v17.13) 新增 */
+}
+
+.custom-color-trigger {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  /* 稍小的圆角 */
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.custom-color-trigger:hover {
+  transform: scale(1.1);
+}
+
+.custom-color-trigger:focus-visible {
+  outline: 3px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
+.color-picker-modal-overlay {
+  /* 1. 复制 .modal-overlay 的样式 */
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+
+  /* 2. 确保它在编辑弹窗 (1500) 和下拉框 (1600) 之上 */
+  z-index: 1800;
+}
+
+.color-picker-modal-box {
+  /* 1. 复制 .modal-box 的样式 */
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-hover);
+
+  /* 2. 自定义样式 */
+  padding: 12px;
+  /* 紧凑一点 */
+  animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  overscroll-behavior-y: contain;
+}
+
+/* 3. (重要) 覆盖 vue3-colorpicker 的默认样式 */
+.color-picker-modal-box .vc-color-wrap {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  width: 280px;
+  /* (v17.10) 给予一个在手机上刚好的固定宽度 */
+}
+
+.color-picker-modal-box .vc-color-wrap.is-widget {
+  padding: 0 !important;
+}
+
+/* 4. "完成" 按钮的样式 */
+.btn-color-picker-done {
+  width: 100%;
+  /* 占满宽度 */
+  margin-top: 10px;
+  font-size: 1rem;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+/* --- (v17.13) 新增：统一的图标按钮样式 --- */
+.btn-icon-simple {
+  /* 1. 统一大小和形状 */
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  font-size: 0.9rem;
+  /* 统一图标大小 */
+  border-radius: 8px;
+
+  /* 2. 居中图标 */
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* 3. 确保悬停时样式一致 (无 transform) */
+.btn-icon-simple:hover,
+.btn-icon-simple:focus-visible {
+  transform: none;
+  box-shadow: none;
+}
+
+/* 4. 将新样式应用到 "X" 按钮 */
+/* 4. 将新样式应用到删除按钮 */
+.btn-remove-simple {
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border);
+  color: var(--color-danger);
+  /* <-- (新增) 默认状态即为红色 */
+}
+
+.btn-remove-simple:hover,
+.btn-remove-simple:focus-visible {
+  background: var(--color-danger);
+  /* <-- (修改) 悬停时背景变红 */
+  border-color: var(--color-danger-hover);
+  color: #fff;
+  /* <-- (修改) 悬停时图标变白 */
+}
+
+/* --- (v17.22) 移动端适配：使用 HTML 包装器 --- */
+
+@media (max-width: 600px) {
+
+  /* 1. (不变) 父容器顶部对齐 */
+  .server-item-simple {
+    padding: 10px 10px 12px 10px;
+    align-items: flex-start;
+  }
+
+  /* 2. (核心) 信息区：
+   * 1. 允许换行
+   * 2. (关键) 为按钮留出空间
+   */
+  .simple-info {
+    flex-wrap: wrap;
+    /* 允许换行 */
+    white-space: normal;
+    overflow: hidden;
+    gap: 4px 10px;
+    align-items: center;
+    /* (关键) 为 3 个按钮 (3*32px) + 2 个间隙 (2*5px) = 106px */
+    width: calc(100% - 106px - 24px - 10px);
+    /* 100% - 按钮 - 拖拽柄 - 间隙 */
+  }
+
+  /* 3. (核心) 第二行包裹器：
+   * 1. 强制换行
+   * 2. 内部使用 flex 布局
+   */
+  .simple-info-line2 {
+    flex-basis: 100%;
+    /* (关键) 强制到第二行 */
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    /* 允许内部元素收缩 */
+  }
+
+  /* --- 4. 第一行项目 --- */
+
+  .simple-tag {
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .simple-comment {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    min-width: 0;
+  }
+
+  /* --- 5. 第二行项目 --- */
+
+  .simple-ip {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-shrink: 1;
+    /* (关键) 允许 IP 收缩 */
+    min-width: 0;
+  }
+
+  .simple-ignored-badge {
+    white-space: nowrap;
+    flex-shrink: 0;
+    /* (关键) "已隐藏" 不收缩 */
+  }
+
+  /* --- 6. (不变) 修复样式和拖拽柄 --- */
+
+  .simple-ip.with-comment {
+    margin-left: 0;
+    font-size: 0.85rem;
+  }
+
+  .drag-handle {
+    margin-top: 1px;
+  }
+
+  .simple-actions {
+    gap: 5px;
+    margin-left: 8px;
+    /* 恢复 margin */
+    padding-top: 0;
+  }
+
+  /* --- (v17.23) 修复服务器列表标题换行 --- */
+
+  .server-list-header {
+    flex-wrap: wrap;
+    /* 1. 允许标题和按钮组换行 */
+    gap: 10px 15px;
+    /* 2. 换行后的垂直/水平间距 */
+  }
+
+  .server-list-header h3 {
+    white-space: nowrap;
+    /* 3. 确保 "服务器列表" 5个字不换行 */
+    font-size: 1.3rem;
+    /* 4. 稍微缩小字体 */
+    margin-bottom: 0;
+    /* 5. 移除 h3 上的间距，使用 gap 代替 */
+  }
+
+  .header-actions {
+    flex-grow: 1;
+    /* 6. (可选) 让按钮组在换行时占满宽度 */
+    justify-content: flex-end;
+    /* 7. (可选) 让按钮保持在右侧 */
+  }
+
 }
 </style>
