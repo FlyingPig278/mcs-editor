@@ -38,6 +38,33 @@ const serverTree = ref([])
 
 const jsonInput = ref(``)
 
+// --- 4.5. (新增) 夜间模式状态 ---
+const isDarkMode = ref(false)
+
+/**
+ * @description 将主题应用到 <html> 标签
+ */
+function applyTheme(isDark) {
+  if (isDark) {
+    document.documentElement.classList.add('dark-mode')
+    isDarkMode.value = true
+  } else {
+    document.documentElement.classList.remove('dark-mode')
+    isDarkMode.value = false
+  }
+}
+
+/**
+ * @description 切换主题并保存到 localStorage
+ */
+function toggleTheme() {
+  const newThemeState = !isDarkMode.value
+  applyTheme(newThemeState)
+  localStorage.setItem('theme', newThemeState ? 'dark' : 'light')
+}
+
+// (我们将在下面的 onMounted 中调用它)
+
 // --- 4. 模态弹窗状态 ---
 
 // --- (A) 通用 Alert/Confirm 弹窗 ---
@@ -638,6 +665,15 @@ onMounted(async () => {
   if (config.value.servers.length === 0) {
     parseAndSetConfig(`{"footer": "", "servers": []}`);
   }
+  const savedTheme = localStorage.getItem('theme')
+  if (savedTheme) {
+    // 1. 优先使用本地存储的设置
+    applyTheme(savedTheme === 'dark')
+  } else {
+    // 2. 否则，跟随操作系统的偏好
+    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    applyTheme(prefersDark)
+  }
   document.addEventListener('keydown', handleGlobalKeydown);
 });
 
@@ -654,6 +690,11 @@ onBeforeUnmount(() => {
 
     <div class="panel editor-panel">
       <header class="panel-header">
+
+        <button @click="toggleTheme" class="theme-toggle-btn" :title="isDarkMode ? '切换到日间模式' : '切换到夜间模式'">
+          <i v-if="isDarkMode" class="fas fa-sun"></i>
+          <i v-else class="fas fa-moon"></i>
+        </button>
         <h1>服务器配置编辑器</h1>
         <div class="subtitle">拖拽服务器卡片调整优先级</div>
       </header>
@@ -911,6 +952,110 @@ onBeforeUnmount(() => {
 
 <style>
 @import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css");
+
+/* --- (新增) 夜间模式 --- */
+
+/* 1. 夜间模式的颜色变量 (覆盖 :root) */
+html.dark-mode {
+  --color-body-gradient-start: #111827;
+  /* 深灰蓝 */
+  --color-body-gradient-end: #1f2937;
+  /* 稍浅的灰蓝 */
+
+  --color-panel-gradient-start: #4f46e5;
+  /* 调整渐变色 */
+  --color-panel-gradient-end: #7c3aed;
+
+  --color-surface: #1f2937;
+  /* 卡片背景 */
+  --color-surface-muted: #374151;
+  /* 嵌套/次要背景 */
+
+  --color-text-primary: #f3f4f6;
+  /* 亮灰色 (非纯白) */
+  --color-text-secondary: #9ca3af;
+  /* 中灰色 */
+
+  --color-border: #4b5563;
+  /* 深色边框 */
+
+  --color-primary: #6366f1;
+  /* 保持不变 */
+  --color-primary-hover: #4f46e5;
+  --color-secondary: #3b82f6;
+  /* 调亮一点的蓝 */
+  --color-secondary-hover: #2563eb;
+
+  --color-focus-outline: rgba(99, 102, 241, 0.55);
+  /* 提高不透明度 */
+
+  --shadow-soft: 0 10px 20px rgba(0, 0, 0, 0.2);
+  --shadow-hover: 0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+/* 2. 为 body 添加过渡动画 */
+body {
+  transition: background 0.3s ease;
+}
+
+/* 3. 为所有使用变量的元素添加过渡动画 */
+.panel,
+.modal-box,
+.btn,
+input[type="text"],
+select,
+textarea,
+.color-picker,
+.server-item-simple,
+.btn-add-child-simple,
+.btn-edit-simple,
+.btn-modal-cancel,
+.btn-modal-confirm,
+.form-compound-input {
+  transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
+}
+
+/* 4. 夜间模式切换按钮的样式 */
+.panel-header {
+  position: relative;
+  /* 为按钮定位 */
+}
+
+.theme-toggle-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  border: none;
+  color: #fff;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  font-size: 1.2rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+
+.theme-toggle-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+  transform: scale(1.1);
+}
+
+/* (夜间模式下切换按钮的样式) */
+html.dark-mode .theme-toggle-btn {
+  background: rgba(0, 0, 0, 0.2);
+  color: #f3f4f6;
+}
+
+html.dark-mode .theme-toggle-btn:hover {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+/* --- (新增结束) --- */
 
 :root {
   --color-body-gradient-start: #eef2ff;
@@ -1289,7 +1434,7 @@ textarea {
 }
 
 .server-item-simple.is-ignored {
-  background: #f9f9f9;
+  background: var(--color-surface-muted);
   opacity: 0.7;
 }
 
@@ -1370,31 +1515,46 @@ textarea {
   box-shadow: none;
 }
 
+/* 找到并替换这个规则 */
 .btn-edit-simple {
-  background: #f0f4f8;
-  color: #4A00E0;
-  border: 1px solid #e0e6ed;
-  padding: 5px 10px;
+  background: var(--color-surface-muted);
+  /* (新) */
+  color: var(--color-primary);
+  /* (新) */
+  border: 1px solid var(--color-border);
+  /* (新) */
+  padding: 6px 12px;
   font-size: 0.85rem;
+  border-radius: 8px;
+  /* (新) */
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
+  /* (新) */
 }
 
+/* 找到并替换这个规则 */
 .btn-edit-simple:hover {
-  background: #e6f0f5;
-  border-color: #4A00E0;
+  background: var(--color-body-gradient-start);
+  /* (新) */
+  border-color: var(--color-primary);
+  /* (新) */
   transform: none;
   box-shadow: none;
 }
 
 .btn-remove-simple {
   background: transparent;
-  color: #e74c3c;
+  color: var(--color-danger);
+  /* (修正) */
   font-size: 1.2rem;
   padding: 5px;
   line-height: 1;
 }
 
 .btn-remove-simple:hover {
-  background-color: #fbeeee;
+  background-color: var(--color-surface-muted);
+  /* (修正) */
+  color: var(--color-danger-hover);
+  /* (修正) */
   transform: none;
   box-shadow: none;
 }
@@ -1406,7 +1566,7 @@ textarea {
   justify-content: center;
   margin-right: 12px;
   cursor: grab;
-  color: #7e8c9a;
+  color: var(--color-text-secondary);
   font-size: 1.5rem;
   padding-top: 0;
   user-select: none;
@@ -1419,8 +1579,10 @@ textarea {
 .empty-state {
   text-align: center;
   padding: 40px 20px;
-  color: #7e8c9a;
-  background: #f5f7fa;
+  color: var(--color-text-secondary);
+  /* (修正) */
+  background: var(--color-surface-muted);
+  /* (修正) */
   border-radius: 8px;
 }
 
@@ -1442,7 +1604,7 @@ textarea {
 }
 
 .sortable-ghost {
-  background: #f0f5ff;
+  background: var(--color-body-gradient-start);
   border: 2px dashed var(--color-primary);
   opacity: 0.7;
   border-radius: 8px;
@@ -1802,7 +1964,7 @@ textarea {
 .child-list.sortable-ghost {
   min-height: 30px;
   /* <-- 原为 50px */
-  background: #f0f5ff;
+  background: var(--color-body-gradient-start);
   border: 2px dashed var(--color-primary);
   border-radius: 8px;
 }
@@ -1827,7 +1989,7 @@ textarea {
 }
 
 .server-item-container.sortable-ghost {
-  background: #f0f5ff;
+  background: var(--color-body-gradient-start);
   border: 2px dashed var(--color-primary);
   opacity: 0.7;
   border-radius: 8px;
