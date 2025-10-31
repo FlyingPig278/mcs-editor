@@ -320,6 +320,13 @@ function saveServer() {
 
   // (v16) 核心逻辑：根据 parent_ip 自动设置 server_type
   if (server.parent_ip) {
+    if (modalMode.value === 'edit' && server.children && server.children.length > 0) {
+      showAlert(
+        `服务器 [${server.ip}] 已经是一个父服务器 (有 ${server.children.length} 个子服)，它不能被设置为另一个服务器的子服务器。`,
+        '保存失败'
+      );
+      return;
+    }
     server.server_type = 'child'
 
     // 自动转换父服
@@ -906,8 +913,10 @@ onBeforeUnmount(() => {
                 <div class="form-group grow">
                   <label>父服务器 (Parent IP)</label>
                   <div class="select-wrapper">
-                    <select v-model="currentServerData.parent_ip"
-                      :disabled="potentialParentServers.length === 0 || (modalMode === 'add' && currentServerData.parent_ip)">
+                    <select v-model="currentServerData.parent_ip" :disabled="(modalMode === 'edit' && currentServerData.children && currentServerData.children.length > 0) ||
+                      potentialParentServers.length === 0 ||
+                      (modalMode === 'add' && currentServerData.parent_ip)
+                      ">
                       <option value="">-- 默认为根服务器 --</option>
                       <option v-for="parent in potentialParentServers" :key="parent.ip" :value="parent.ip"
                         :disabled="parent.ip === editingServerIp">
