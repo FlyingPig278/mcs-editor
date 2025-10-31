@@ -63,7 +63,7 @@ const modalIds = {
   serverBody: 'server-modal-body'
 }
 
-const focusableSelectors = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1")]'
+const focusableSelectors = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex^="-"])'
 
 function focusFirstWithin(containerRef) {
   nextTick(() => {
@@ -832,20 +832,18 @@ onBeforeUnmount(() => {
                 </div>
               </div>
 
-              <hr class="form-divider">
-
               <div class="form-row">
-                <div class="form-group">
-                  <label>标签 (Tag)</label>
-                  <input type="text" v-model="currentServerData.tag" @input="checkIfCustom(currentServerData)"
-                    placeholder="留空则不显示" />
+
+                <div class="form-group" style="flex-grow: 1;"> <label>标签 / 颜色</label>
+                  <div class="form-compound-input">
+                    <input type="text" v-model="currentServerData.tag" @input="checkIfCustom(currentServerData)"
+                      placeholder="留空则不显示" class="form-compound-input-text" />
+                    <input type="color" v-model="currentServerData.tag_color_with_hash"
+                      @input="onColorInput(currentServerData)" class="color-picker form-compound-input-color" />
+                  </div>
                 </div>
-                <div class="form-group">
-                  <label>标签颜色</label>
-                  <input type="color" v-model="currentServerData.tag_color_with_hash"
-                    @input="onColorInput(currentServerData)" class="color-picker" />
-                </div>
-                <div class="form-group">
+
+                <div class="form-group" style="flex-grow: 1;">
                   <label>快捷预设</label>
                   <div class="select-wrapper">
                     <select v-model="currentServerData.selectedPreset" @change="applyPreset(currentServerData)">
@@ -855,19 +853,20 @@ onBeforeUnmount(() => {
                       </option>
                     </select>
                   </div>
-                  <p class="form-help-text" style="margin-top: 8px;">
-                    💡 选择预设可自动填充标签和颜色。
-                  </p>
                 </div>
-              </div>
 
-              <hr class="form-divider">
+              </div>
+              <p class="form-help-text" style="margin-top: -10px; margin-bottom: 18px;text-align: right;">
+                💡 选择预设可自动填充标签和颜色。
+              </p>
+
 
               <div class="form-row">
                 <div class="form-group grow">
                   <label>父服务器 (Parent IP)</label>
                   <div class="select-wrapper">
-                    <select v-model="currentServerData.parent_ip">
+                    <select v-model="currentServerData.parent_ip"
+                      :disabled="potentialParentServers.length === 0 || (modalMode === 'add' && currentServerData.parent_ip)">
                       <option value="">-- 默认为根服务器 --</option>
                       <option v-for="parent in potentialParentServers" :key="parent.ip" :value="parent.ip"
                         :disabled="parent.ip === editingServerIp">
@@ -958,7 +957,7 @@ body {
   grid-template-columns: minmax(600px, 2fr) minmax(350px, 1fr);
   align-items: flex-start;
   gap: 20px;
-  max-width: 1600px;
+  max-width: 1280px;
   width: 100%;
   margin: 0 auto;
 }
@@ -1435,13 +1434,6 @@ textarea {
   padding: 5px;
 }
 
-.form-divider {
-  border: none;
-  height: 1px;
-  background-color: var(--color-border);
-  margin: 24px 0;
-}
-
 .server-item-simple.sortable-drag {
   opacity: 0.9;
   background: #f5f3ff;
@@ -1760,7 +1752,7 @@ textarea {
   opacity: 0.6;
 }
 
-.server-form .form-group:has(.color-picker)::before,
+.server-form .form-group:has(> .color-picker)::before,
 .server-form .form-group-checkbox::before {
   display: none;
 }
@@ -1769,7 +1761,7 @@ textarea {
   padding-left: 4px;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 440px) {
   .server-form .form-row {
     flex-direction: column;
     gap: 15px;
@@ -1859,5 +1851,55 @@ textarea {
 
 .server-list-anim-child-move {
   transition: transform 0.3s ease;
+}
+
+/* 1. 复合框的容器 */
+.form-compound-input {
+  display: flex;
+  align-items: center;
+  position: relative;
+  width: 100%;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.form-compound-input:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
+}
+
+/* 2. 内部的文本输入框 */
+.form-compound-input-text {
+  flex: 1 1 auto;
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent;
+  padding-left: 26px !important;
+  min-width: 0;
+}
+
+/* * 3. (已修正) 内部的颜色选择器
+ * 我们添加了 .server-form 前缀来提高优先级
+*/
+.server-form .form-compound-input-color {
+  flex: 0 0 auto;
+  width: 44px;
+  /* <--- 现在这个会生效了 */
+  height: 44px;
+  /* <--- 这个也会生效 */
+  margin: 2px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  padding: 4px;
+}
+
+/* (已修正) 同样为 :focus 规则添加前缀 */
+.server-form .form-compound-input-color:focus {
+  outline: none;
+  box-shadow: none;
 }
 </style>
