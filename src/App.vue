@@ -934,17 +934,21 @@ onBeforeUnmount(() => {
                 }">
                   <div class="drag-handle">⠿</div>
                   <div class="simple-info">
-                    <span v-if="server.tag" class="simple-tag" :style="{
-                      backgroundColor: server.tag_color_with_hash,
-                      color: getContrastColor(server.tag_color_with_hash)
-                    }">
-                      {{ server.tag }}
-                    </span>
-                    <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
-                    <span class="simple-ip" :class="{ 'with-comment': server.comment }">
-                      {{ server.comment ? '(' + server.ip + ')' : server.ip }}
-                    </span>
-                    <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                    <div class="simple-info-line">
+                      <span v-if="server.tag" class="simple-tag" :style="{
+                        backgroundColor: server.tag_color_with_hash,
+                        color: getContrastColor(server.tag_color_with_hash)
+                      }">
+                        {{ server.tag }}
+                      </span>
+                      <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
+                    </div>
+                    <div class="simple-info-line">
+                      <span class="simple-ip" :class="{ 'with-comment': server.comment }">
+                        {{ server.comment ? '(' + server.ip + ')' : server.ip }}
+                      </span>
+                      <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
+                    </div>
                   </div>
                   <div class="simple-actions">
                     <button @click="addChildServer(server)" class="btn btn-add-child-simple btn-icon-simple"
@@ -970,14 +974,16 @@ onBeforeUnmount(() => {
                     }">
                       <div class="drag-handle">⠿</div>
                       <div class="simple-info">
-                        <span v-if="childServer.tag" class="simple-tag" :style="{
-                          backgroundColor: childServer.tag_color_with_hash,
-                          color: getContrastColor(childServer.tag_color_with_hash)
-                        }">
-                          {{ childServer.tag }}
-                        </span>
-                        <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
-                        <div class="simple-info-line2">
+                        <div class="simple-info-line">
+                          <span v-if="childServer.tag" class="simple-tag" :style="{
+                            backgroundColor: childServer.tag_color_with_hash,
+                            color: getContrastColor(childServer.tag_color_with_hash)
+                          }">
+                            {{ childServer.tag }}
+                          </span>
+                          <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
+                        </div>
+                        <div class="simple-info-line">
                           <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
                             {{ childServer.comment ? '(' + childServer.ip + ')' : childServer.ip }}
                           </span>
@@ -1766,11 +1772,18 @@ textarea {
   min-width: 0;
 }
 
+.simple-info-line {
+  display: contents;
+  /* (v17.33) 核心: 桌面端让此包装器"消失" */
+}
+
 .simple-tag {
   font-size: 0.85rem;
   font-weight: 500;
   padding: 3px 8px;
   border-radius: 4px;
+  flex-shrink: 0;
+  /* <--- (v17.24) 新增此行 */
 }
 
 .simple-comment {
@@ -1783,13 +1796,15 @@ textarea {
 }
 
 .simple-ip {
-  font-family: "JetBrains Mono", "Consolas", monospace;
-  font-size: 0.95rem;
-  color: var(--color-text-primary);
+  white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: nowrap;
-  flex-shrink: 100;
+  flex-shrink: 1;
+  min-width: 0;
+  flex-basis: 100%;
+  /* <--- (v17.25) 强制换到第二行 */
+  flex-grow: 1;
+  /* <--- (v17.29) 核心: 强制 IP 填满第二行 */
 }
 
 .simple-ip.with-comment {
@@ -1802,6 +1817,8 @@ textarea {
   font-size: 0.8rem;
   font-weight: 500;
   color: var(--color-text-secondary);
+  flex-shrink: 0;
+  /* <--- (v17.24) 新增此行 */
 }
 
 .simple-actions {
@@ -2750,66 +2767,66 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
     align-items: flex-start;
   }
 
-  /* 2. (核心) 信息区：
-   * 1. 允许换行
-   * 2. (关键) 为按钮留出空间
-   */
+  /* 2. (v17.33) 重构 simple-info 为垂直布局 */
   .simple-info {
-    flex-wrap: wrap;
-    /* 允许换行 */
+    flex-direction: column;
+    /* 强制垂直堆叠 */
+    align-items: flex-start;
+    /* 左对齐 */
+    gap: 4px;
+    /* 行间距 */
     white-space: normal;
-    overflow: hidden;
-    gap: 4px 10px;
-    align-items: center;
-    /* (关键) 为 3 个按钮 (3*32px) + 2 个间隙 (2*5px) = 106px */
-    width: calc(100% - 106px - 24px - 10px);
-    /* 100% - 按钮 - 拖拽柄 - 间隙 */
+    /* 允许换行（虽然我们内部会阻止）*/
+
+    /* (v17.33) 移除旧规则 */
+    /* flex-wrap: wrap; */
+    /* align-items: center; */
   }
 
-  /* 3. (核心) 第二行包裹器：
-   * 1. 强制换行
-   * 2. 内部使用 flex 布局
-   */
-  .simple-info-line2 {
-    flex-basis: 100%;
-    /* (关键) 强制到第二行 */
+  /* (v17.33) 新增：行容器样式 */
+  .simple-info-line {
     display: flex;
+    /* 变为 flex 布局 */
     align-items: center;
+    /* 内部元素垂直居中 */
     gap: 8px;
-    min-width: 0;
-    /* 允许内部元素收缩 */
+    /* 元素间距 (tag 和 comment 之间) */
+    width: 100%;
+    /* 占满父容器宽度 */
   }
 
   /* --- 4. 第一行项目 --- */
-
   .simple-tag {
     white-space: nowrap;
     flex-shrink: 0;
   }
 
+  /* (v17.33) 重构 .simple-comment */
   .simple-comment {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
+    flex: 1;
+    /* 核心：让 comment 填满第一行的剩余空间 */
   }
 
   /* --- 5. 第二行项目 --- */
-
+  /* (v17.33) 重构 .simple-ip */
   .simple-ip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 1;
-    /* (关键) 允许 IP 收缩 */
     min-width: 0;
+    flex: 1;
+    /* 核心：让 ip 填满第二行的剩余空间 */
   }
 
   .simple-ignored-badge {
     white-space: nowrap;
     flex-shrink: 0;
-    /* (关键) "已隐藏" 不收缩 */
   }
 
   /* --- 6. (不变) 修复样式和拖拽柄 --- */
@@ -2828,6 +2845,11 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
     margin-left: 8px;
     /* 恢复 margin */
     padding-top: 0;
+  }
+
+  .simple-ip.with-comment {
+    margin-left: 0;
+    font-size: 0.85rem;
   }
 
   /* --- (v17.23) 修复服务器列表标题换行 --- */
