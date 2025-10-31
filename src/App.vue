@@ -24,11 +24,10 @@ import 'vue3-colorpicker/style.css'
  * @description 预设服务器标签
  */
 const presets = {
-  "mod": { tag: "模组", tag_color_with_hash: "#E67E22" },
+  "lobby": { tag: "大厅", tag_color_with_hash: "#3498DB" },
   "survival": { tag: "生存", tag_color_with_hash: "#2ECC71" },
   "creative": { tag: "创造", tag_color_with_hash: "#F1C40F" },
-  "lobby": { tag: "大厅", tag_color_with_hash: "#3498DB" },
-  "proxy": { tag: "代理服", tag_color_with_hash: "#8E44AD" }
+  "mod": { tag: "模组", tag_color_with_hash: "#E67E22" },
 }
 
 /**
@@ -2684,8 +2683,6 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 1;
-  /* <-- (v17.13) 新增 */
 }
 
 .custom-color-trigger {
