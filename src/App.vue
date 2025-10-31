@@ -28,6 +28,8 @@ const presets = {
   "survival": { tag: "生存", tag_color_with_hash: "#2ECC71" },
   "creative": { tag: "创造", tag_color_with_hash: "#F1C40F" },
   "mod": { tag: "模组", tag_color_with_hash: "#E67E22" },
+  "pvp": { tag: "PVP", tag_color_with_hash: "#E74C3C" },        // <-- 新增：PVP (战斗红)
+  "recreation": { tag: "复原", tag_color_with_hash: "#9B59B6" } // <-- 新增：复原 (高校紫)
 }
 
 /**
@@ -223,17 +225,54 @@ const potentialParentServers = computed(() => {
 
 /**
  * @description 计算出最终用于“导出”的 JSON 字符串。
+ * (v_Fix) 修改为导出 'serverTree' (嵌套结构) 以方便后端渲染。
  */
 const outputJson = computed(() => {
-  const cleanConfig = JSON.parse(JSON.stringify(config.value))
-  if (cleanConfig.servers) {
-    cleanConfig.servers.forEach(server => {
-      delete server.tag_color_with_hash
-      delete server.selectedPreset
-    })
+
+  /**
+   * 递归清理节点函数
+   * @param {object} serverNode - 来自 serverTree 的一个服务器节点
+   * @returns {object} 清理后的节点
+   */
+  function cleanNode(serverNode) {
+    // 1. 复制节点，但不包括 UI 辅助属性
+    const {
+      tag_color_with_hash,
+      selectedPreset,
+      ...cleanServer
+    } = serverNode;
+
+    // 2. 需求 3: 清理 ignore_in_list (如果为 false)
+    if (cleanServer.ignore_in_list === false) {
+      delete cleanServer.ignore_in_list;
+    }
+
+    // 3. 递归处理子节点
+    if (cleanServer.children && cleanServer.children.length > 0) {
+      // 递归调用 cleanNode 来清理所有子节点
+      cleanServer.children = cleanServer.children.map(cleanNode);
+    } else {
+      // 需求 2: 如果没有子节点，则删除 "children" 属性
+      delete cleanServer.children;
+    }
+
+    return cleanServer;
   }
-  return JSON.stringify(cleanConfig, null, 2)
-})
+
+  // 1. 构造最终的配置对象
+  const cleanConfig = {
+    footer: config.value.footer,
+    show_offline_by_default: config.value.show_offline_by_default,
+
+    // 2. 核心: 
+    // 我们不再使用扁平的 config.value.servers
+    // 而是使用嵌套的 serverTree.value，并用 cleanNode 递归清理它
+    servers: serverTree.value.map(cleanNode)
+  };
+
+  // 3. 格式化并返回 JSON 字符串
+  return JSON.stringify(cleanConfig, null, 2);
+});
 
 /**
  * @description (v17) 计算当前选中的父服务器对象，用于自定义下拉框显示
@@ -605,6 +644,7 @@ function buildTree(flatList) {
 
 /**
  * @description 解析 JSON 字符串并设置到 `config` 状态中。
+ * (已修复：增加导入时扁平化逻辑)
  */
 function parseAndSetConfig(jsonString) {
   try {
@@ -617,11 +657,46 @@ function parseAndSetConfig(jsonString) {
       show_offline_by_default: false
     }
 
+    // --- (v_Fix) 新增：扁平化函数 ---
+    // 定义一个函数来递归地扁平化服务器列表
+    const flatList = [];
+    function flattenImportedServers(servers, parentIp = "") {
+      if (!Array.isArray(servers)) return;
+
+      servers.forEach(s => {
+        // 1. 为当前服务器设置 parent_ip
+        // (优先使用自己的 parent_ip，否则继承父级的 ip)
+        s.parent_ip = s.parent_ip || parentIp;
+
+        // 2. 递归处理子服务器 (如果有)
+        const children = s.children; // 暂存子服
+        delete s.children; // 从对象中移除 children 数组
+
+        // 3. 将当前服务器添加到扁平列表
+        flatList.push(s);
+
+        // 4. 递归调用
+        if (children) {
+          flattenImportedServers(children, s.ip); // 传入当前 ip 作为 parentIp
+        }
+      });
+    }
+    // --- (v_Fix) 扁平化函数结束 ---
+
+    const finalServers = []; // 存储最终扁平化、处理过的服务器
+
     if (data.servers && Array.isArray(data.servers)) {
+
+      // --- (v_Fix) 运行扁平化 ---
+      // 无论导入的 data.servers 是扁平的还是嵌套的，
+      // 运行后 flatList 都会是一个扁平的列表。
+      flattenImportedServers(data.servers);
+
       const ipSet = new Set();
       const duplicates = [];
 
-      data.servers.forEach((s) => {
+      // --- (v_Fix) 遍历 `flatList` 而不是 `data.servers` ---
+      flatList.forEach((s) => {
         if (ipSet.has(s.ip)) {
           duplicates.push(s.ip);
         }
@@ -630,25 +705,30 @@ function parseAndSetConfig(jsonString) {
         // 补全 UI 辅助属性
         s.tag_color_with_hash = (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888'
         s.selectedPreset = ""
-        s.parent_ip = s.parent_ip || ""
+        // (v_Fix) 不再需要 s.parent_ip = s.parent_ip || ""，因为扁平化时已处理
         s.ignore_in_list = s.ignore_in_list || false
         s.comment = s.comment || ""
       })
 
       if (duplicates.length > 0) {
-        throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
+        throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址 (在扁平化后)。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
       }
 
-      data.servers.sort((a, b) => a.priority - b.priority)
+      // (v_Fix) 按 priority 排序 (如果存在)
+      // 拖拽后会自动重新生成 priority，这里只是尽力保持导入时的顺序
+      flatList.sort((a, b) => (a.priority || 0) - (b.priority || 0))
+
+      finalServers.push(...flatList);
+
     } else {
-      data.servers = [] // 确保 data.servers 总是一个数组
+      // data.servers = [] // 旧逻辑
     }
 
     // (v17.34) 核心：使用默认值填充 config，然后用加载的 data 覆盖它
     config.value = {
       ...defaultConfig,
       ...data,
-      servers: data.servers // 确保 server 列表是已被处理过的
+      servers: finalServers // (v_Fix) 使用扁平化和处理过的 `finalServers`
     }
 
   } catch (e) {
@@ -1796,12 +1876,27 @@ textarea {
   border-left: 4px solid var(--color-panel-gradient-start);
 }
 
-.server-item-simple.is-ignored {
-  opacity: 0.7;
+/* --- (已修复) 已隐藏服务器的删除线 (方案3) --- */
+
+/* (重要) 移除父容器的删除线，避免继承问题 */
+.server-item-simple.is-ignored .simple-info {
+  text-decoration: none;
 }
 
+/* 只对需要删除线的文本元素单独应用 */
+.server-item-simple.is-ignored .simple-tag,
+.server-item-simple.is-ignored .simple-comment,
 .server-item-simple.is-ignored .simple-ip {
   text-decoration: line-through;
+  opacity: 0.7;
+  /* 增加隐藏效果 */
+}
+
+/* 确保徽章始终清晰，没有删除线 */
+.server-item-simple.is-ignored .simple-ignored-badge {
+  text-decoration: none;
+  opacity: 1;
+  /* 确保徽章清晰 */
 }
 
 .simple-info {
@@ -1842,11 +1937,10 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
+  /* 允许 IP 地址收缩 */
   min-width: 0;
-  flex-basis: 100%;
-  /* <--- (v17.25) 强制换到第二行 */
-  flex-grow: 1;
-  /* <--- (v17.29) 核心: 强制 IP 填满第二行 */
+  /* 允许收缩到 0 */
+  /* 已移除 flex-basis 和 flex-grow，使其在宽屏下正常排列 */
 }
 
 .simple-ip.with-comment {
@@ -2945,8 +3039,7 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
-    flex: 1;
-    /* 核心：让 ip 填满第二行的剩余空间 */
+    /* 已移除 flex: 1，使其不再推开徽章 */
   }
 
   .simple-ignored-badge {
