@@ -46,7 +46,8 @@ const serverTypeLabels = {
 
 const config = ref({
   footer: "",
-  servers: []
+  servers: [],
+  show_offline_by_default: false // (v17.34) 新增：全局配置
 })
 
 const serverTree = ref([])
@@ -609,6 +610,14 @@ function buildTree(flatList) {
 function parseAndSetConfig(jsonString) {
   try {
     const data = JSON.parse(jsonString)
+
+    // (v17.34) 定义一个包含所有默认值的结构
+    const defaultConfig = {
+      footer: "",
+      servers: [],
+      show_offline_by_default: false
+    }
+
     if (data.servers && Array.isArray(data.servers)) {
       const ipSet = new Set();
       const duplicates = [];
@@ -633,9 +642,16 @@ function parseAndSetConfig(jsonString) {
 
       data.servers.sort((a, b) => a.priority - b.priority)
     } else {
-      data.servers = []
+      data.servers = [] // 确保 data.servers 总是一个数组
     }
-    config.value = data
+
+    // (v17.34) 核心：使用默认值填充 config，然后用加载的 data 覆盖它
+    config.value = {
+      ...defaultConfig,
+      ...data,
+      servers: data.servers // 确保 server 列表是已被处理过的
+    }
+
   } catch (e) {
     showAlert(e.message, "导入失败")
   }
@@ -859,8 +875,8 @@ onMounted(async () => {
   }
 
   // (v16 建议 5) 确保初始列表为空 (而不是依赖 defaultJsonString)
-  if (config.value.servers.length === 0) {
-    parseAndSetConfig(`{"footer": "", "servers": []}`);
+  if (config.value.servers.length === 0 && !config.value.footer) { // (v17.34) 检查是否真的为空
+    parseAndSetConfig(`{}`); // (v17.34) 解析空对象以触发默认值填充
   }
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme) {
@@ -901,9 +917,27 @@ onBeforeUnmount(() => {
       <div class="panel-body">
 
         <div class="form-section">
-          <h3>页脚设置</h3>
+          <h3>全局设置</h3>
           <div class="form-group">
-            <input type="text" v-model="config.footer" placeholder="输入页脚文本" />
+            <label for="global-footer"
+              style="font-weight: normal; font-size: 0.95rem; color: var(--color-text-primary);">
+              页脚文本 (Footer)
+            </label>
+            <input id="global-footer" type="text" v-model="config.footer" placeholder="输入页脚文本" />
+          </div>
+
+          <div class="form-group-toggle">
+            <label for="global_show_offline" class="toggle-switch-label">
+              默认显示离线服务器
+            </label>
+            <label class="toggle-switch">
+              <input type="checkbox" v-model="config.show_offline_by_default" id="global_show_offline"
+                class="toggle-switch-input" />
+              <span class="toggle-switch-slider"></span>
+            </label>
+            <p class="form-help-text" style="margin-left: 10px; margin-top: 0; margin-bottom: 0;">
+              (勾选后, /mcs 命令将默认显示所有服务器, 相当于 /mcs all)
+            </p>
           </div>
         </div>
 
@@ -1242,15 +1276,24 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="form-row">
-                <div class="form-group form-group-checkbox">
-                  <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                    :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')" class="styled-checkbox" />
-                  <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')">
-                    <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏 (ignore_in_list)
-                  </label>
+                <div style="padding-top: 10px;">
+                  <div class="form-group-toggle" style="margin-top: 0;">
+                    <label class="toggle-switch">
+                      <input type="checkbox" v-model="currentServerData.ignore_in_list"
+                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                        class="toggle-switch-input" />
+                      <span class="toggle-switch-slider"></span>
+                    </label>
+                    <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                      class="toggle-switch-label">
+                      <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏
+                    </label>
+                  </div>
+                  <p class="form-help-text" style="margin-top: 8px; margin-bottom: 0; padding-left: 5px;">
+                    (勾选后, 该服务器将不会显示在 /mcs 的列表图片中)
+                  </p>
                 </div>
               </div>
-
             </div>
           </div>
 
@@ -2609,6 +2652,7 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
 .btn-modal-cancel svg,
 .btn-modal-confirm svg,
 .form-group-checkbox label svg,
+.toggle-switch-label svg,
 .modal-header h3 svg {
   /* * 这是一个魔法数字，用于将 SVG 稍微向下移动一点
    * 使其在视觉上与文本的“中线”对齐 
@@ -2756,6 +2800,90 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   color: #fff;
   /* <-- (修改) 悬停时图标变白 */
 }
+
+/* --- (v17.35) 新增：切换开关样式 --- */
+.form-group-toggle {
+  display: flex;
+  align-items: center;
+  /* 关键：修复对齐问题 */
+  gap: 12px;
+  margin-top: 15px;
+  padding-left: 5px;
+}
+
+.toggle-switch-label {
+  color: var(--color-text-primary);
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  font-size: 0.95rem;
+  /* 匹配 .form-group-checkbox label */
+}
+
+.toggle-switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  /* 开关宽度 */
+  height: 28px;
+  /* 开关高度 */
+  flex-shrink: 0;
+  /* 防止被压缩 */
+}
+
+/* 隐藏默认的 checkbox */
+.toggle-switch-input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+/* 开关的 "轨道" */
+.toggle-switch-slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--color-border);
+  transition: .3s;
+  border-radius: 28px;
+  /* 圆角 */
+}
+
+/* 开关的 "滑块" (白色圆点) */
+.toggle-switch-slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: .3s;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  /* 轻微阴影 */
+}
+
+/* 选中时的样式：轨道变色 */
+.toggle-switch-input:checked+.toggle-switch-slider {
+  background-color: var(--color-primary);
+}
+
+/* 选中时的样式：滑块移动 */
+.toggle-switch-input:checked+.toggle-switch-slider:before {
+  transform: translateX(22px);
+  /* 移动距离: 50(宽) - 20(滑块) - 4(左距) - 4(右距) = 22px */
+}
+
+/* 焦点样式 (用于键盘导航) */
+.toggle-switch-input:focus-visible+.toggle-switch-slider {
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
+}
+
+/* --- (v17.35) 切换开关样式结束 --- */
 
 /* --- (v17.22) 移动端适配：使用 HTML 包装器 --- */
 
