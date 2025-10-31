@@ -1,6 +1,6 @@
 <script setup>
 // --- 1. 导入依赖 ---
-import { ref, computed, nextTick, watch, onMounted } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
 import draggable from 'vuedraggable'
 
 // --- 2. 静态配置数据 ---
@@ -49,10 +49,84 @@ const modalResolve = ref(null)
 
 // --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗状态 ---
 const isServerModalVisible = ref(false) // 控制新弹窗的显示与隐藏
-const modalMode = ref('add')              // 'add' 或 'edit'
+const modalMode = ref('add')            // 'add' 或 'edit'
 const currentServerData = ref(null)     // 存储正在添加/编辑的服务器数据 (副本)
-const editingServerIp = ref(null)       // 存储*原始*IP，用于编辑时的唯一性检查
+const editingServerIp = ref(null)       // 存储原始 IP，用于编辑时的唯一性检验
+const alertModalRef = ref(null)         // Alert/Confirm 弹窗容器
+const serverModalRef = ref(null)        // 服务器编辑弹窗容器
 let cancelModalTimeout = null           // 统一的弹窗清理句柄
+
+const modalIds = {
+  alertTitle: 'alert-modal-title',
+  alertMessage: 'alert-modal-message',
+  serverTitle: 'server-modal-title',
+  serverBody: 'server-modal-body'
+}
+
+const focusableSelectors = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1")]'
+
+function focusFirstWithin(containerRef) {
+  nextTick(() => {
+    const container = containerRef?.value ?? containerRef
+    if (!container) return
+    const preferred = container.querySelector('[data-autofocus]')
+    const fallback = container.querySelector(focusableSelectors)
+    const target = preferred || fallback || container
+    target.focus()
+  })
+}
+
+watch(isModalVisible, (visible) => {
+  if (!visible) return
+  focusFirstWithin(alertModalRef)
+})
+
+watch(isServerModalVisible, (visible) => {
+  if (!visible) return
+  focusFirstWithin(serverModalRef)
+})
+
+function trapFocus(event, containerRef) {
+  const container = containerRef?.value ?? containerRef
+  if (!container) return
+  const focusable = container.querySelectorAll(focusableSelectors)
+  if (focusable.length === 0) {
+    event.preventDefault()
+    container.focus()
+    return
+  }
+  const first = focusable[0]
+  const last = focusable[focusable.length - 1]
+  const active = document.activeElement
+  if (event.shiftKey) {
+    if (active === first || active === container) {
+      event.preventDefault()
+      last.focus()
+    }
+  } else if (active === last) {
+    event.preventDefault()
+    first.focus()
+  }
+}
+
+function handleGlobalKeydown(event) {
+  if (event.key === 'Escape') {
+    if (isServerModalVisible.value) {
+      event.preventDefault()
+      closeServerModal()
+    } else if (isModalVisible.value) {
+      event.preventDefault()
+      onModalCancel()
+    }
+  } else if (event.key === 'Tab') {
+    if (isServerModalVisible.value) {
+      trapFocus(event, serverModalRef)
+    } else if (isModalVisible.value) {
+      trapFocus(event, alertModalRef)
+    }
+  }
+}
+// 统一的弹窗清理句柄
 
 // --- 5. 计算属性 (Computed Properties) ---
 
@@ -564,6 +638,11 @@ onMounted(async () => {
   if (config.value.servers.length === 0) {
     parseAndSetConfig(`{"footer": "", "servers": []}`);
   }
+  document.addEventListener('keydown', handleGlobalKeydown);
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('keydown', handleGlobalKeydown);
 });
 
 // (v16 建议 5) 移除末尾的 parseAndSetConfig(defaultJsonString)
@@ -736,13 +815,35 @@ onMounted(async () => {
     </div>
 
     <transition name="modal-fade">
-      <div v-if="isModalVisible" class="modal-overlay" @click.self="onModalCancel">
-        <div class="modal-box">
-          <div class="modal-header"><h3>{{ modalTitle }}</h3></div>
-          <div class="modal-body"><pre>{{ modalMessage }}</pre></div>
+      <div
+          v-if="isModalVisible"
+          class="modal-overlay"
+          role="presentation"
+          @click.self="onModalCancel"
+      >
+        <div
+            class="modal-box"
+            ref="alertModalRef"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="modalIds.alertTitle"
+            :aria-describedby="modalIds.alertMessage"
+            tabindex="-1"
+        >
+          <div class="modal-header">
+            <h3 :id="modalIds.alertTitle">{{ modalTitle }}</h3>
+          </div>
+          <div class="modal-body">
+            <pre :id="modalIds.alertMessage">{{ modalMessage }}</pre>
+          </div>
           <div class="modal-footer">
-            <button v-if="modalType === 'confirm'" @click="onModalCancel" class="btn btn-modal-cancel">取消</button>
-            <button @click="onModalConfirm" class="btn btn-modal-confirm">确认</button>
+            <button
+                v-if="modalType === 'confirm'"
+                @click="onModalCancel"
+                class="btn btn-modal-cancel"
+                type="button"
+            >取消</button>
+            <button @click="onModalConfirm" class="btn btn-modal-confirm" type="button">确认</button>
           </div>
         </div>
       </div>
@@ -750,28 +851,46 @@ onMounted(async () => {
 
 
     <transition name="modal-fade">
-      <div v-if="isServerModalVisible" class="modal-overlay edit-modal" @click.self="closeServerModal">
-        <div class="modal-box edit-modal-box">
+      <div
+          v-if="isServerModalVisible"
+          class="modal-overlay edit-modal"
+          role="presentation"
+          @click.self="closeServerModal"
+      >
+        <div
+            class="modal-box edit-modal-box"
+            ref="serverModalRef"
+            role="dialog"
+            aria-modal="true"
+            :aria-labelledby="modalIds.serverTitle"
+            :aria-describedby="modalIds.serverBody"
+            tabindex="-1"
+        >
 
           <div class="modal-header">
-            <h3 v-if="modalMode === 'add'">
+            <h3 v-if="modalMode === 'add'" :id="modalIds.serverTitle">
               <i class="fas fa-plus-circle"></i> 添加新服务器
             </h3>
-            <h3 v-else>
-              <i class="fas fa-edit"></i> 编辑服务器: {{ editingServerIp }}
+            <h3 v-else :id="modalIds.serverTitle">
+              <i class="fas fa-edit"></i> 编辑服务器 {{ editingServerIp }}
             </h3>
-            <button @click="closeServerModal" class="btn-close-modal">
+            <button @click="closeServerModal" class="btn-close-modal" type="button">
               <i class="fas fa-times"></i>
             </button>
           </div>
 
-          <div class="modal-body" v-if="currentServerData">
+          <div class="modal-body" v-if="currentServerData" :id="modalIds.serverBody">
             <div class="server-form">
 
               <div class="form-row">
                 <div class="form-group grow">
                   <label>服务器地址 (IP) <span class="required">*</span></label>
-                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com"/>
+                  <input
+                      type="text"
+                      v-model="currentServerData.ip"
+                      placeholder="例如: play.example.com"
+                      data-autofocus
+                  />
                 </div>
               </div>
 
@@ -780,12 +899,13 @@ onMounted(async () => {
                   <label>父服务器 (Parent IP)</label>
                   <div class="select-wrapper">
                     <select v-model="currentServerData.parent_ip">
-                      <option value="">-- 无 (作为根服务器) --</option>
+                      <option value="">-- 默认为根服务器 --</option>
                       <option
                           v-for="parent in potentialParentServers"
                           :key="parent.ip"
                           :value="parent.ip"
-                          :disabled="parent.ip === editingServerIp" >
+                          :disabled="parent.ip === editingServerIp"
+                      >
                         [{{ serverTypeLabels[parent.server_type] || '服务器' }}] {{ parent.tag || parent.ip }}
                       </option>
                     </select>
@@ -802,7 +922,7 @@ onMounted(async () => {
               <div class="form-row">
                 <div class="form-group grow">
                   <label>注释 (Comment) (可选)</label>
-                  <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一服 (S1)"/>
+                  <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)"/>
                 </div>
               </div>
 
@@ -859,10 +979,10 @@ onMounted(async () => {
           </div>
 
           <div class="modal-footer">
-            <button @click="closeServerModal" class="btn-modal-cancel">
+            <button @click="closeServerModal" class="btn-modal-cancel" type="button">
               <i class="fas fa-times"></i> 取消
             </button>
-            <button @click="saveServer" class="btn-modal-confirm">
+            <button @click="saveServer" class="btn-modal-confirm" type="button">
               <i class="fas fa-save"></i> {{ modalMode === 'add' ? '确认添加' : '保存更改' }}
             </button>
           </div>
@@ -876,6 +996,29 @@ onMounted(async () => {
 
 <style>
 @import url("https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css");
+:root {
+  --color-body-gradient-start: #eef2ff;
+  --color-body-gradient-end: #f9fafb;
+  --color-panel-gradient-start: #6366f1;
+  --color-panel-gradient-end: #7c3aed;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f5f7fb;
+  --color-text-primary: #1f2933;
+  --color-text-secondary: #4b5563;
+  --color-border: #dbe2ef;
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-secondary: #2563eb;
+  --color-secondary-hover: #1d4ed8;
+  --color-success: #10b981;
+  --color-success-hover: #059669;
+  --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
+  --color-focus-outline: rgba(99, 102, 241, 0.45);
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --shadow-hover: 0 16px 40px rgba(79, 70, 229, 0.16);
+}
+
 /* 1. 全局和背景 */
 * {
   box-sizing: border-box;
@@ -884,10 +1027,11 @@ onMounted(async () => {
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
 }
 body {
-  background: linear-gradient(135deg, #1a2a6c, #b21f1f, #fdbb2d);
+  background: linear-gradient(135deg, var(--color-body-gradient-start), var(--color-body-gradient-end));
   min-height: 100vh;
   padding: 20px;
-  color: #333;
+  color: var(--color-text-primary);
+  line-height: 1.5;
 }
 
 /* 2. 整体布局 */
@@ -907,11 +1051,12 @@ body {
 
 /* 3. 面板样式 */
 .panel {
-  background: rgba(255, 255, 255, 0.98);
-  border-radius: 12px;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  background: var(--color-surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
   overflow: hidden;
   min-width: 0;
+  border: 1px solid var(--color-border);
 }
 .io-panel {
   position: sticky;
@@ -919,9 +1064,9 @@ body {
   align-self: flex-start;
 }
 .panel-header {
-  background: linear-gradient(135deg, #4A00E0, #8E2DE2);
-  color: white;
-  padding: 20px;
+  background: linear-gradient(135deg, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
+  color: #fff;
+  padding: 24px 20px;
   text-align: center;
 }
 .panel-header h1 { font-size: 28px; margin-bottom: 10px; }
@@ -933,19 +1078,19 @@ body {
 .form-section { margin-bottom: 20px; }
 .form-section h3 {
   font-size: 1.4rem;
-  color: #2c3e50;
+  color: var(--color-text-primary);
   margin-bottom: 15px;
   padding-bottom: 5px;
-  border-bottom: 2px solid #e0e6ed;
+  border-bottom: 2px solid var(--color-border);
 }
 .io-panel .form-section h3 {
   font-size: 1.2rem;
   border-bottom: none;
-  color: #4A00E0;
+  color: var(--color-primary);
 }
 .form-section p {
   margin-bottom: 10px;
-  color: #555;
+  color: var(--color-text-secondary);
   font-size: 0.9rem;
 }
 .form-row { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 10px; }
@@ -965,7 +1110,7 @@ label {
 }
 /* v11 优化 #1: 必填项星号 */
 label .required {
-  color: #f44336;
+  color: var(--color-danger);
   font-weight: bold;
   margin-left: 2px;
 }
@@ -973,33 +1118,48 @@ input[type="text"],
 select,
 textarea {
   width: 100%;
-  padding: 8px 10px;
-  border: 1px solid #e0e6ed;
-  border-radius: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
   font-size: 0.95rem;
-  transition: all 0.2s;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
   max-width: 100%;
-  background-color: #fff;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
+}
+input[type="text"]::placeholder,
+textarea::placeholder {
+  color: var(--color-text-secondary);
+  opacity: 0.6;
 }
 input[type="text"]:focus,
 select:focus,
 textarea:focus {
-  border-color: #4A00E0;
-  box-shadow: 0 0 5px rgba(74, 0, 224, 0.2);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
 }
+button:focus-visible,
+.btn:focus-visible,
+.btn-close-modal:focus-visible {
+  outline: 3px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
 textarea {
   font-family: "JetBrains Mono", "Fira Code", "Consolas", "Courier New", monospace;
   font-size: 14px;
   line-height: 1.5;
-  background-color: #fdfdfd;
+  background-color: var(--color-surface);
+  color: var(--color-text-primary);
 }
 .color-picker {
   height: 38px;
   padding: 4px;
-  border-radius: 6px;
-  border: 1px solid #e0e6ed;
+  border-radius: 10px;
+  border: 1px solid var(--color-border);
   width: 100%;
+  background: var(--color-surface);
 }
 .form-group-checkbox {
   display: flex;
@@ -1053,33 +1213,32 @@ textarea {
   margin-bottom: 0;
 }
 .btn {
-  background: #4CAF50;
-  color: white;
-  border: none;
-  padding: 10px 15px;
-  border-radius: 6px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  padding: 10px 16px;
   cursor: pointer;
-  font-weight: 500;
+  font-weight: 600;
   font-size: 0.95rem;
-  transition: all 0.3s;
+  font-family: inherit;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
   white-space: nowrap;
+  transition: background 0.2s ease, color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease, border-color 0.2s ease;
 }
 .btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-hover);
 }
-.btn-primary { background: #4CAF50; }
-.btn-primary:hover { background: #388E3C; }
-.btn-secondary { background: #2196F3; }
-.btn-secondary:hover { background: #1976D2; }
-.btn-danger { background: #f44336; }
-.btn-danger:hover { background: #d32f2f; }
-.btn-add { background: #009688; }
-.btn-add:hover { background: #00796B; }
+.btn-primary { background: var(--color-success); color: #fff; border-color: transparent; }
+.btn-primary:hover { background: var(--color-success-hover); }
+.btn-secondary { background: var(--color-secondary); color: #fff; border-color: transparent; }
+.btn-secondary:hover { background: var(--color-secondary-hover); }
+.btn-danger { background: var(--color-danger); color: #fff; border-color: transparent; }
+.btn-danger:hover { background: var(--color-danger-hover); }
+.btn-add { background: var(--color-primary); color: #fff; border-color: transparent; }
+.btn-add:hover { background: var(--color-primary-hover); }
 
 
 /* 6. 服务器列表 */
@@ -1097,26 +1256,27 @@ textarea {
   min-height: 50px;
 }
 .server-item-simple {
-  background: #fff;
-  border: 1px solid #e0e6ed;
-  border-radius: 8px;
-  padding: 10px 12px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 12px 14px;
   display: flex;
   align-items: center;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
   user-select: none;
 }
 .server-item-simple:hover {
-  border-color: #4A00E0;
+  border-color: var(--color-primary);
+  box-shadow: 0 10px 16px rgba(79, 70, 229, 0.15);
 }
 .server-item-simple.is-child {
-  background: #fdfdff;
-  border-left: 4px solid #8E2DE2;
+  background: var(--color-surface-muted);
+  border-left: 4px solid var(--color-panel-gradient-end);
   margin-bottom: 6px;
 }
 .server-item-simple.is-parent {
-  background: #f5f3ff;
-  border-left: 4px solid #4A00E0;
+  background: var(--color-surface-muted);
+  border-left: 4px solid var(--color-panel-gradient-start);
 }
 .server-item-simple.is-ignored {
   background: #f9f9f9;
@@ -1142,7 +1302,7 @@ textarea {
 }
 .simple-comment {
   font-weight: 500;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1151,21 +1311,21 @@ textarea {
 .simple-ip {
   font-family: "JetBrains Mono", "Consolas", monospace;
   font-size: 0.95rem;
-  color: #333;
+  color: var(--color-text-primary);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 100;
 }
 .simple-ip.with-comment {
-  color: #7e8c9a;
+  color: var(--color-text-secondary);
   font-size: 0.85rem;
   margin-left: -5px;
 }
 .simple-ignored-badge {
   font-size: 0.8rem;
   font-weight: 500;
-  color: #7e8c9a;
+  color: var(--color-text-secondary);
 }
 .simple-actions {
   display: flex;
@@ -1173,15 +1333,19 @@ textarea {
   margin-left: 10px;
 }
 .btn-add-child-simple {
-  background: #f0f8f7;
-  color: #009688;
-  border: 1px solid #e0e6ed;
-  padding: 5px 10px;
+  background: var(--color-surface-muted);
+  color: var(--color-primary);
+  border: 1px solid var(--color-border);
+  padding: 6px 12px;
   font-size: 0.85rem;
+  border-radius: 8px;
+  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
 }
-.btn-add-child-simple:hover {
-  background: #e6f0f5;
-  border-color: #009688;
+.btn-add-child-simple:hover,
+.btn-add-child-simple:focus-visible {
+  background: var(--color-body-gradient-start);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
   transform: none;
   box-shadow: none;
 }
@@ -1246,7 +1410,7 @@ textarea {
 }
 .sortable-ghost {
   background: #f0f5ff;
-  border: 2px dashed #4A00E0;
+  border: 2px dashed var(--color-primary);
   opacity: 0.7;
   border-radius: 8px;
 }
@@ -1255,61 +1419,100 @@ textarea {
 /* 7. 模态弹窗 (Alert/Confirm) */
 .modal-overlay {
   position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
   justify-content: center;
+  padding: 20px;
   z-index: 2000;
 }
 .modal-overlay.edit-modal {
   z-index: 1000;
 }
 .modal-box {
-  background: white;
-  border-radius: 12px;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
-  width: 90%;
-  max-width: 450px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-hover);
+  width: min(90%, 520px);
   overflow: hidden;
   animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
 }
 .modal-header {
   padding: 15px 20px;
-  border-bottom: 1px solid #eee;
-  background: #f9f9f9;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface-muted);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 .modal-header h3 {
   font-size: 1.25rem;
-  color: #2c3e50;
+  color: var(--color-text-primary);
 }
 .modal-body {
-  padding: 25px 20px;
+  padding: 28px 24px;
   font-size: 1rem;
   line-height: 1.6;
+  color: var(--color-text-primary);
 }
 .modal-body pre {
   white-space: pre-wrap;
   word-wrap: break-word;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-  color: #333;
+  color: var(--color-text-secondary);
 }
 .modal-footer {
   display: flex;
   justify-content: flex-end;
-  gap: 10px;
-  padding: 15px 20px;
-  background: #f9f9f9;
-  border-top: 1px solid #eee;
+  gap: 12px;
+  padding: 16px 24px;
+  background: var(--color-surface-muted);
+  border-top: 1px solid var(--color-border);
 }
-/* (注意：旧的 .btn-modal-confirm 和 .btn-modal-cancel 已被移除，) */
-/* (它们将被下面 "弹窗美化" 部分的新样式取代) */
+
+.btn-modal-cancel {
+  background: var(--color-surface-muted);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border);
+  padding: 10px 22px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn-modal-cancel:hover,
+.btn-modal-cancel:focus-visible {
+  background: var(--color-body-gradient-start);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-hover);
+}
+
+.btn-modal-confirm {
+  background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+  color: #fff;
+  border: none;
+  padding: 10px 26px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease, box-shadow 0.2s ease;
+  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.25);
+}
+
+.btn-modal-confirm:hover,
+.btn-modal-confirm:focus-visible {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px rgba(79, 70, 229, 0.3);
+  background: linear-gradient(135deg, var(--color-primary-hover) 0%, var(--color-secondary-hover) 100%);
+}
+
 @keyframes modal-pop-in {
   from { opacity: 0; transform: scale(0.8); }
   to { opacity: 1; transform: scale(1); }
@@ -1322,124 +1525,122 @@ textarea {
 .modal-fade-leave-to {
   opacity: 0;
 }
-/* --- (v16) 弹窗美化 - 开始 (来自 AI 的建议) --- */
+/* --- 编辑弹窗样式 --- */
 .modal-overlay.edit-modal {
-  z-index: 1000;
-  background: rgba(0, 0, 0, 0.7);
-  backdrop-filter: blur(5px);
+  z-index: 1500;
 }
 
 .modal-box.edit-modal-box {
-  max-width: 650px;
-  border-radius: 16px;
-  overflow: hidden;
-  box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 255, 255, 0.2);
-  background: linear-gradient(145deg, #ffffff, #f5f7fa);
+  max-width: 680px;
 }
 
 .edit-modal-box .modal-header {
-  background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-  color: white;
-  padding: 20px 25px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  background: linear-gradient(135deg, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
+  color: #fff;
+  padding: 24px 28px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.18);
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
 
 .edit-modal-box .modal-header h3 {
-  font-size: 1.5rem;
+  font-size: 1.4rem;
   font-weight: 600;
-  letter-spacing: 0.5px;
-  color: white;
+  margin: 0;
 }
 
 .btn-close-modal {
   background: transparent;
   border: none;
-  font-size: 1.8rem;
+  font-size: 1.5rem;
   line-height: 1;
-  color: rgba(255, 255, 255, 0.8);
+  color: rgba(255, 255, 255, 0.85);
   cursor: pointer;
-  padding: 0 5px;
-  transition: all 0.3s;
+  padding: 4px 6px;
+  border-radius: 50%;
+  transition: background 0.2s ease, color 0.2s ease, transform 0.2s ease;
 }
 
 .btn-close-modal:hover {
-  color: white;
-  transform: scale(1.1);
+  color: #fff;
+  background: rgba(255, 255, 255, 0.18);
+  transform: scale(1.08);
 }
 
 .edit-modal-box .modal-body {
-  padding: 25px;
+  padding: 28px;
   max-height: 70vh;
   overflow-y: auto;
+  background: var(--color-surface);
 }
 
 .server-form {
-  padding: 5px;
+  padding: 4px 0;
 }
 
 .server-form .form-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 20px;
-  margin-bottom: 20px;
+  gap: 18px;
+  margin-bottom: 18px;
 }
 
 .server-form .form-group {
-  margin-bottom: 0px;
   flex: 1;
-  min-width: 100px;
-  min-width: 0;
+  min-width: 160px;
   position: relative;
 }
 
 .server-form label {
-  display: block;
-  margin-bottom: 8px;
-  font-weight: 600;
-  color: #2c3e50;
-  font-size: 0.95rem;
   display: flex;
   align-items: center;
+  margin-bottom: 8px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
 }
 
-.server-form label .required {
-  color: #ff4757;
-  font-weight: bold;
+.server-form .required {
+  color: var(--color-danger);
   margin-left: 4px;
 }
 
 .server-form input[type="text"],
 .server-form select {
   width: 100%;
-  padding: 14px 15px;
-  border: 1px solid #d1d5db;
-  border-radius: 10px;
-  font-size: 1rem;
-  transition: all 0.3s;
-  background-color: #fff;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-  padding-left: 25px; /* (为 ::before 装饰留出空间) */
+  padding: 12px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  padding-left: 26px;
+  color: var(--color-text-primary);
 }
 
 .server-form input[type="text"]:focus,
 .server-form select:focus {
-  border-color: #4A00E0;
-  box-shadow: 0 0 0 3px rgba(74, 0, 224, 0.15);
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
 }
 
 .server-form .color-picker {
   height: 48px;
   padding: 4px;
-  border-radius: 10px;
-  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  border: 1px solid var(--color-border);
   width: 100%;
   cursor: pointer;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
+  background: var(--color-surface);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.server-form .color-picker:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-focus-outline);
+  outline: none;
 }
 
 .server-form .form-group-checkbox {
@@ -1453,25 +1654,25 @@ textarea {
 .server-form .form-group-checkbox label {
   margin-bottom: 0;
   font-weight: 500;
-  color: #2d3436;
+  color: var(--color-text-primary);
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 0.95rem;
 }
 
 .server-form .styled-checkbox {
   width: 20px;
   height: 20px;
-  accent-color: #4A00E0;
+  accent-color: var(--color-primary);
   cursor: pointer;
 }
 
 .server-form .select-wrapper::after {
-  right: 15px; /* (调整以匹配更大的内边距) */
+  right: 15px;
 }
 
 .server-form .form-help-text {
   font-size: 0.85rem;
-  color: #7e8c9a;
+  color: var(--color-text-secondary);
   margin-top: 8px;
   margin-bottom: 0;
   line-height: 1.4;
@@ -1481,73 +1682,32 @@ textarea {
   display: flex;
   justify-content: flex-end;
   gap: 15px;
-  padding: 20px 25px;
-  background: #f8f9fa;
-  border-top: 1px solid #e9ecef;
+  padding: 18px 28px;
+  background: var(--color-surface-muted);
+  border-top: 1px solid var(--color-border);
 }
 
-/* (v16) 新的弹窗按钮样式 (将应用于所有弹窗) */
-.btn-modal-cancel {
-  background: #f1f2f6;
-  color: #2d3436;
-  border: none;
-  padding: 12px 25px;
-  border-radius: 10px;
-  font-weight: 600;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: all 0.3s;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.05);
-}
-
-.btn-modal-cancel:hover {
-  background: #e9ecef;
-  transform: translateY(-2px);
-  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-}
-
-.btn-modal-confirm {
-  background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-  color: white;
-  border: none;
-  padding: 12px 30px;
-  border-radius: 10px;
-  font-weight: 600;
-  font-size: 1rem;
-  cursor: pointer;
-  transition: all 0.3s;
-  box-shadow: 0 4px 10px rgba(37, 117, 252, 0.3);
-}
-
-.btn-modal-confirm:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 15px rgba(37, 117, 252, 0.4);
-  background: linear-gradient(135deg, #5d0fb9 0%, #1c6ae4 100%);
-}
-
-/* (v16) 表单图标装饰 */
 .server-form .form-group::before {
   content: '';
   position: absolute;
-  top: 43px; /* (调整以匹配新的 input 高度) */
+  top: 42px;
   left: 12px;
   width: 4px;
   height: 20px;
-  background: linear-gradient(to bottom, #6a11cb, #2575fc);
+  background: linear-gradient(to bottom, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
   border-radius: 2px;
-  opacity: 0.7;
+  opacity: 0.6;
 }
-/* (v16) 颜色选择器和复选框不需要前置装饰 */
+
 .server-form .form-group:has(.color-picker)::before,
 .server-form .form-group-checkbox::before {
   display: none;
 }
+
 .server-form .form-group:has(.color-picker) input {
-  padding-left: 4px; /* (重置颜色选择器的 padding) */
+  padding-left: 4px;
 }
 
-
-/* (v16) 响应式调整 */
 @media (max-width: 768px) {
   .server-form .form-row {
     flex-direction: column;
@@ -1558,6 +1718,7 @@ textarea {
     width: 95%;
   }
 }
+
 /* --- 弹窗美化 - 结束 --- */
 
 
@@ -1588,7 +1749,7 @@ textarea {
 .child-list.sortable-ghost {
   min-height: 30px; /* <-- 原为 50px */
   background: #f0f5ff;
-  border: 2px dashed #4A00E0;
+  border: 2px dashed var(--color-primary);
   border-radius: 8px;
 }
 .child-list.sortable-ghost > * {
@@ -1609,7 +1770,7 @@ textarea {
 }
 .server-item-container.sortable-ghost {
   background: #f0f5ff;
-  border: 2px dashed #4A00E0;
+  border: 2px dashed var(--color-primary);
   opacity: 0.7;
   border-radius: 8px;
   min-height: 50px;
