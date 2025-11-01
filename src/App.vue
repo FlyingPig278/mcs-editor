@@ -59,8 +59,8 @@ function compactArrayToJson(compactData: any[]): Server[] {
       ip: item[S_IP],
       comment: item[S_COMMENT] || '',
       tag: item[S_TAG] || '',
-      tag_color: item[S_TAG_COLOR] || '333333',
-      tag_color_with_hash: item[S_TAG_COLOR] ? `#${item[S_TAG_COLOR]}` : '#333333',
+      tag_color: item[S_TAG_COLOR] || 'FF9800',
+      tag_color_with_hash: item[S_TAG_COLOR] ? `#${item[S_TAG_COLOR]}` : '#FF9800',
       ignore_in_list: item[S_IGNORE] === 1,
       children: children,
       // 以下是需要补全的默认/计算属性
@@ -116,7 +116,7 @@ function decompressConfig(encodedString: string): AppConfig | null {
     const servers = compactArrayToJson(compactStructure[2]);
 
     return {
-      footer: compactStructure[0] || { text: 'Powered by MCSManager' },
+      footer: compactStructure[0] === 0 ? '' : (compactStructure[0] || ''),
       show_offline_by_default: compactStructure[1] === 1,
       servers: servers
     };
@@ -191,10 +191,10 @@ const isDarkMode = ref(false);
 function applyTheme(dark: boolean) {
   isDarkMode.value = dark;
   if (dark) {
-    document.documentElement.classList.add('dark');
+    document.documentElement.classList.add('dark-mode');
     localStorage.setItem('theme', 'dark');
   } else {
-    document.documentElement.classList.remove('dark');
+    document.documentElement.classList.remove('dark-mode');
     localStorage.setItem('theme', 'light');
   }
 }
@@ -387,7 +387,7 @@ const outputJson = computed<AppConfig>(() => {
     return newNode;
   }
 
-  const cleanServers = config.value.servers.map(cleanNode);
+  const cleanServers = serverTree.value.map(cleanNode);
 
   // 2. 构建最终的配置对象
   return {
@@ -512,22 +512,43 @@ async function removeAllServers() {
 
 // --- (G) 导入/导出 (IO) 操作 ---
 
-function copyToClipboard() {
-  const url = new URL(window.location.href);
-  url.search = `?data=${compressedOutput.value}`;
-
-  navigator.clipboard.writeText(url.toString()).then(() => {
-    showToast('分享链接已复制到剪贴板！');
-  }, () => {
-    showAlert('复制失败！请检查浏览器权限。', '复制失败');
-  });
-}
 /**
  * @description (优化) 计算出用于 URL 分享的压缩字符串
  */
 const compressedOutput = computed<string>(() => {
   return compressConfig(outputJson.value);
 });
+
+/**
+ * @description 计算出用于QQ机器人的导入命令
+ */
+const importCommand = computed<string>(() => {
+  return `/mcs import ${compressedOutput.value}`;
+});
+
+/**
+ * @description 复制QQ机器人导入命令
+ */
+function copyImportCommand() {
+  navigator.clipboard.writeText(importCommand.value).then(() => {
+    showToast('导入命令已复制！请直接将其发送到QQ群中。');
+  }, () => {
+    showAlert('复制失败！请检查浏览器权限。', '复制失败');
+  });
+}
+
+function downloadJson() {
+  const jsonString = JSON.stringify(outputJson.value, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mcs-config.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
 
 /**
  * @description (v17) 计算当前选中的父服务器对象，用于自定义下拉框显示
@@ -595,6 +616,7 @@ defineExpose({
   jsonInput,
   outputJson,
   compressedOutput,
+  importCommand,
   isModalVisible,
   modalMode,
   currentServerData,
@@ -626,7 +648,8 @@ defineExpose({
   showConfirm,
   showAlert,
   showToast,
-  copyToClipboard,
+  copyImportCommand,
+  downloadJson,
   loadConfig,
   onColorInput,
   checkIfCustom,
@@ -676,8 +699,8 @@ function createBlankServer(parentServer: Server | null = null): Partial<Server> 
     ip: "",
     comment: "",
     tag: "",
-    tag_color: "333333",
-    tag_color_with_hash: "#333333",
+    tag_color: "FF9800",
+    tag_color_with_hash: "#FF9800",
     server_type: SERVER_TYPE.STANDALONE, // 默认为 standalone
     parent_ip: parentServer ? parentServer.ip : "", // (v16) 预设 parent_ip
     selectedPreset: "",
@@ -982,7 +1005,7 @@ function selectPreset(presetKey: string) {
   if (currentServerData.value) {
     currentServerData.value.selectedPreset = presetKey
     // 关键: 选择后要立即应用 (applyPreset 会处理空 key)
-    // applyPreset(preset, true); // (v17.34) 移除，因为逻辑已合并
+    applyPreset(currentServerData.value as Server);
   }
   isPresetSelectOpen.value = false
   activePresetIndex.value = -1; // 重置
@@ -1141,19 +1164,60 @@ function flattenTreeAndSync() {
  * @description “加载配置”按钮的点击事件处理器。
  */
 async function loadConfig() {
+  // 1. 确认覆盖
   if (config.value.servers.length > 0) {
     const confirmed = await showConfirm(
       '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
       '覆盖确认'
     );
     if (!confirmed) {
-      return; // 用户取消操作
+      return;
     }
   }
 
-  const success = parseAndSetConfig(jsonInput.value);
-  if (success) {
-    showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
+  const input = jsonInput.value.trim();
+  if (!input) {
+    showAlert('输入框不能为空。', '提示');
+    return;
+  }
+
+  let configToParse: string | AppConfig | null = null;
+
+  // 2. 检查输入类型 (URL vs JSON)
+  if (input.startsWith('http') && input.includes('?data=')) {
+    try {
+      const url = new URL(input);
+      const dataFromUrl = url.searchParams.get('data');
+      if (dataFromUrl) {
+        const decompressed = decompressConfig(dataFromUrl);
+        if (decompressed) {
+          configToParse = decompressed;
+        } else {
+          showAlert('无法解压来自链接的数据，链接可能不完整或已损坏。', '导入失败');
+          return;
+        }
+      } else {
+        // 是一个 URL 但没有 data 参数，这很奇怪，当作错误处理
+        showAlert('链接中未找到有效的“data”参数。', '导入失败');
+        return;
+      }
+    } catch (e) {
+      showAlert('输入的分享链接无效。', '导入失败');
+      return;
+    }
+  } else {
+    // 3. 假定为 JSON 字符串
+    configToParse = input;
+  }
+
+  // 4. 解析和设置配置
+  if (configToParse) {
+    const success = parseAndSetConfig(configToParse);
+    if (success) {
+      showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
+      jsonInput.value = ''; // 成功后清空
+    }
+    // `parseAndSetConfig` 内部会在失败时显示 alert
   }
 }
 
@@ -1196,7 +1260,7 @@ function parseAndSetConfig(input: string | AppConfig): boolean {
       // 补全 UI 辅助属性和默认值
       const server: Partial<Server> = {
         ...s,
-        tag_color_with_hash: (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888',
+        tag_color_with_hash: (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#FF9800',
         selectedPreset: "",
         ignore_in_list: s.ignore_in_list || false,
         comment: s.comment || "",
@@ -1224,8 +1288,13 @@ function parseAndSetConfig(input: string | AppConfig): boolean {
     const flatServers = flattenImportedServers(importedConfig.servers || []);
     const validatedServers = processAndValidate(flatServers);
 
+    let footerContent = importedConfig.footer;
+    if (typeof footerContent === 'object' && footerContent !== null && 'text' in footerContent) {
+      footerContent = (footerContent as { text: string }).text;
+    }
+
     config.value.servers = validatedServers;
-    config.value.footer = importedConfig.footer || "";
+    config.value.footer = footerContent || "";
     config.value.show_offline_by_default = importedConfig.show_offline_by_default || false;
 
     return true;
@@ -1379,7 +1448,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <draggable v-model="serverTree" :item-key="(server: Server) => server.ip" handle=".drag-handle"
+          <draggable v-if="serverTree && serverTree.length > 0" v-model="serverTree" :item-key="(server: Server) => server.ip" handle=".drag-handle"
             :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
             class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
@@ -1466,9 +1535,9 @@ onBeforeUnmount(() => {
             </template>
           </draggable>
 
-          <div v-if="!serverTree || serverTree.length === 0" class="empty-state">
+          <div v-else class="empty-state">
             <h3>尚未添加服务器</h3>
-            <p>点击上方"添加"按钮开始配置，或从剪贴板自动导入</p>
+            <p>点击上方"添加"按钮开始配置，或使用导入功能粘贴数据</p>
           </div>
         </div>
       </div>
@@ -1478,9 +1547,9 @@ onBeforeUnmount(() => {
       <div class="panel-body">
         <div class="form-section">
           <h3 class="io-header">1. 导入 (Import)</h3>
-          <p>从机器人 `/mcs export` 导出的 JSON 粘贴到此处：</p>
+          <p>粘贴分享链接或从机器人 /mcs export 导出的 JSON：</p>
           <div class="form-group">
-            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴 JSON..."></textarea>
+            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或 JSON..."></textarea>
           </div>
           <button @click="loadConfig" class="btn btn-primary">
             <font-awesome-icon :icon="faUpload" /> 加载配置
@@ -1489,12 +1558,15 @@ onBeforeUnmount(() => {
 
         <div class="form-section">
           <h3 class="io-header">2. 导出 (Export)</h3>
-          <p>复制下面的压缩字符串，可通过 URL 分享：</p>
+          <p>复制生成的命令，并将其发送到QQ群聊中：</p>
           <div class="form-group">
-            <textarea :value="compressedOutput" rows="8" readonly></textarea>
+            <textarea :value="importCommand" rows="8" readonly></textarea>
           </div>
-          <button @click="copyToClipboard" class="btn btn-secondary">
-            <font-awesome-icon :icon="faClipboard" /> 复制分享链接
+          <button @click="copyImportCommand" class="btn btn-secondary">
+            <font-awesome-icon :icon="faClipboard" /> 复制导入命令
+          </button>
+          <button @click="downloadJson" class="btn btn-primary" style="margin-left: 10px;">
+            <font-awesome-icon :icon="faSave" /> 导出JSON
           </button>
         </div>
       </div>
@@ -2201,7 +2273,6 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 15px;
 }
 
 .header-actions {
@@ -2211,6 +2282,7 @@ textarea {
 
 .server-list {
   min-height: 50px;
+  margin-top: 15px;
 }
 
 .server-item-simple {
@@ -2373,12 +2445,13 @@ textarea {
 
 .empty-state {
   text-align: center;
-  padding: 40px 20px;
+  padding: 20px;
   color: var(--color-text-secondary);
   /* (修正) */
   background: var(--color-surface-muted);
   /* (修正) */
   border-radius: 8px;
+  margin-top: 15px;
 }
 
 .parent-warning {
