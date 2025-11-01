@@ -14,7 +14,8 @@ import {
   faPlus,
   faTrash,
   faUpload,    // <-- (v17.15) 新增
-  faClipboard  // <-- (v17.15) 新增
+  faClipboard, // <-- (v17.15) 新增
+  faSpinner
 } from '@fortawesome/free-solid-svg-icons'
 import { ColorPicker } from 'vue3-colorpicker'
 import 'vue3-colorpicker/style.css'
@@ -96,18 +97,28 @@ const isServerModalVisible = ref(false) // 控制新弹窗的显示与隐藏
 const modalMode = ref('add')            // 'add' 或 'edit'
 const currentServerData = ref(null)     // 存储正在添加/编辑的服务器数据 (副本)
 const editingServerIp = ref(null)       // 存储原始 IP，用于编辑时的唯一性检验
+const isSaving = ref(false)             // (优化) 保存按钮的加载状态
 const alertModalRef = ref(null)         // Alert/Confirm 弹窗容器
 const serverModalRef = ref(null)        // 服务器编辑弹窗容器
+
+// (优化) 自定义下拉框 A11y 状态
 const isParentSelectOpen = ref(false)
+const activeParentIndex = ref(-1)
+
 const parentSelectTriggerRef = ref(null) // 触发器按钮
 const parentSelectOptionsRef = ref(null) // 选项列表
 const isPresetSelectOpen = ref(false)
 const presetSelectTriggerRef = ref(null)
 const presetSelectOptionsRef = ref(null)
+const activePresetIndex = ref(-1)
 const isColorPickerOpen = ref(false)
 const colorPickerTriggerRef = ref(null)
 const colorPickerPanelRef = ref(null)
 let cancelModalTimeout = null           // 统一的弹窗清理句柄
+
+// (优化) 使用常量替代魔法字符串，提高代码可维护性
+const MODAL_MODE = Object.freeze({ ADD: 'add', EDIT: 'edit' });
+const SERVER_TYPE = Object.freeze({ STANDALONE: 'standalone', PARENT: 'parent', CHILD: 'child' });
 
 const modalIds = {
   alertTitle: 'alert-modal-title',
@@ -220,7 +231,7 @@ function handleGlobalKeydown(event) {
  */
 const potentialParentServers = computed(() => {
   if (!config.value.servers) return []
-  return config.value.servers.filter(s => s.server_type === 'parent' || s.server_type === 'standalone')
+  return config.value.servers.filter(s => s.server_type === SERVER_TYPE.PARENT || s.server_type === SERVER_TYPE.STANDALONE)
 })
 
 /**
@@ -345,7 +356,7 @@ function createBlankServer(parentServer = null) {
     tag: "",
     tag_color: "333333",
     tag_color_with_hash: "#333333",
-    server_type: "standalone", // 默认为 standalone
+    server_type: SERVER_TYPE.STANDALONE, // 默认为 standalone
     parent_ip: parentServer ? parentServer.ip : "", // (v16) 预设 parent_ip
     selectedPreset: "",
     ignore_in_list: false,
@@ -369,7 +380,7 @@ async function openServerModal(serverToEdit = null, parentServer = null) {
 
   if (serverToEdit) {
     // --- 编辑模式 ---
-    modalMode.value = 'edit'
+    modalMode.value = MODAL_MODE.EDIT
     // 存储原始 IP 用于验证
     editingServerIp.value = serverToEdit.ip
     // 填充数据为 *深拷贝*
@@ -377,7 +388,7 @@ async function openServerModal(serverToEdit = null, parentServer = null) {
     currentServerData.value = JSON.parse(JSON.stringify(serverToEdit))
   } else {
     // --- 添加模式 ---
-    modalMode.value = 'add'
+    modalMode.value = MODAL_MODE.ADD
     editingServerIp.value = null
     // 填充数据为空白对象
     await nextTick() // 等待 v-if=null 生效
@@ -407,84 +418,124 @@ function closeServerModal() {
 }
 
 /**
- * @description (v16) 保存“添加”或“编辑”的服务器
+ * @description (优化) 检查设置父服务器时是否会造成循环依赖。
+ * @param {string} serverIp - 当前服务器的 IP。
+ * @param {string} newParentIp - 计划设置的父服务器 IP。
+ * @returns {boolean} - 如果会造成循环则返回 true。
  */
-function saveServer() {
-  if (!currentServerData.value) return;
+function checkForCircularDependency(serverIp, newParentIp) {
+  if (!newParentIp || serverIp === newParentIp) {
+    return false; // 没有父级或父级是自己，不算循环 (由其他验证处理)
+  }
 
+  let currentIp = newParentIp;
+  const visited = new Set([serverIp]); // 将当前节点加入访问集合
+
+  while (currentIp) {
+    if (visited.has(currentIp)) {
+      return true; // 发现循环
+    }
+    visited.add(currentIp);
+
+    const parentServer = config.value.servers.find(s => s.ip === currentIp);
+    currentIp = parentServer ? parentServer.parent_ip : null;
+  }
+
+  return false;
+}
+
+
+/**
+ * @description (v16) 保存“添加”或“编辑”的服务器 (已重构)
+ */
+async function saveServer() {
+  if (!currentServerData.value || isSaving.value) return;
+
+  isSaving.value = true;
   const server = currentServerData.value;
   const newIp = (server.ip || "").trim();
 
-  // 验证1: 检查 IP 是否为空
+  // --- 1. 验证 ---
   if (newIp === '') {
     showAlert('服务器地址 (IP) 不能为空！', '保存失败');
+    isSaving.value = false;
     return;
   }
 
-  // 验证2: 检查 IP 唯一性
-  // 仅当 (IP 发生变化) 或 (这是新添加的服务器) 时才检查
-  if (newIp !== editingServerIp.value) {
+  const isIpChanged = newIp !== editingServerIp.value;
+  if (isIpChanged) {
     const isDuplicate = config.value.servers.some(s => s.ip === newIp);
     if (isDuplicate) {
       showAlert(`服务器地址 (IP) "${newIp}" 已存在！\n请使用唯一的 IP 地址。`, '保存失败');
+      isSaving.value = false;
       return;
     }
   }
 
-  server.ip = newIp
-
-  // (v16) 核心逻辑：根据 parent_ip 自动设置 server_type
   if (server.parent_ip) {
-    if (modalMode.value === 'edit' && server.children && server.children.length > 0) {
+    // 验证1: 父服务器不能成为子服务器
+    if (modalMode.value === MODAL_MODE.EDIT && server.children && server.children.length > 0) {
       showAlert(
-        `服务器 [${server.ip}] 已经是一个父服务器 (有 ${server.children.length} 个子服)，它不能被设置为另一个服务器的子服务器。`,
+        `服务器 [${server.ip}] 本身是一个父服务器，因此不能被设置为其他服务器的子服务器。`,
         '保存失败'
       );
+      isSaving.value = false;
       return;
     }
-    server.server_type = 'child'
-
-    // 自动转换父服
-    const parent = config.value.servers.find(s => s.ip === server.parent_ip)
-    if (parent && parent.server_type === 'standalone') {
-      parent.server_type = 'parent'
+    // 验证2: (优化) 防止循环依赖
+    if (checkForCircularDependency(editingServerIp.value || newIp, server.parent_ip)) {
+      showAlert(
+        `无法将服务器 [${server.parent_ip}] 设置为父服务器，因为这会创建一个循环依赖关系。`,
+        '保存失败'
+      );
+      isSaving.value = false;
+      return;
     }
-  } else {
-    // 如果没有 parent_ip，它就是 standalone
-    // （注意：如果它有子服，flattenTreeAndSync 会自动将其设为 parent，这里不用管）
-    server.server_type = 'standalone'
   }
 
-  // 应用更改
-  if (modalMode.value === 'edit') {
-    // --- 编辑模式 ---
+  // --- 2. 更新数据 ---
+  server.ip = newIp;
 
-    // --- (新增) v17 需求 1: 同步更新子服的 parent_ip ---
-    const ipChanged = newIp !== editingServerIp.value;
-    if (ipChanged) {
-      // 遍历整个服务器列表
+  // 根据 parent_ip 自动设置 server_type
+  if (server.parent_ip) {
+    server.server_type = SERVER_TYPE.CHILD;
+    // 自动将独立的父服转换为 'parent' 类型
+    const parent = config.value.servers.find(s => s.ip === server.parent_ip);
+    if (parent && parent.server_type === SERVER_TYPE.STANDALONE) {
+      parent.server_type = SERVER_TYPE.PARENT;
+    }
+  } else {
+    // 如果它有子节点，将在 flattenTreeAndSync 中被更正为 'parent'
+    server.server_type = SERVER_TYPE.STANDALONE;
+  }
+
+  // --- 3. 应用更改到扁平列表 ---
+  if (modalMode.value === MODAL_MODE.EDIT) {
+    // 如果 IP 地址被修改，需要更新所有子服务器的 parent_ip
+    if (isIpChanged && editingServerIp.value) {
       config.value.servers.forEach(s => {
-        // 如果有子服的 parent_ip 指向旧 IP
         if (s.parent_ip === editingServerIp.value) {
-          // 将它更新为新 IP
           s.parent_ip = newIp;
         }
       });
     }
 
-    // 找到原始服务器对象
+    // 找到并更新原始服务器对象
     const originalServer = config.value.servers.find(s => s.ip === editingServerIp.value);
     if (originalServer) {
-      // 将副本数据覆盖回去
-      Object.assign(originalServer, server)
+      Object.assign(originalServer, server);
     }
   } else {
-    // --- 添加模式 ---
-    // (v14) 核心简化：只需推入扁平列表
-    config.value.servers.push(server)
+    // 添加新服务器
+    config.value.servers.push(server);
   }
 
-  closeServerModal() // 关闭弹窗并清理
+  // --- 4. 收尾 ---
+  // 延迟以观察加载状态
+  await new Promise(resolve => setTimeout(resolve, 200));
+  isSaving.value = false;
+  closeServerModal();
+  showAlert(modalMode.value === MODAL_MODE.ADD ? '服务器已成功添加！' : '服务器已成功更新！', '保存成功');
 }
 
 /**
@@ -492,6 +543,42 @@ function saveServer() {
  */
 function toggleParentSelect() {
   isParentSelectOpen.value = !isParentSelectOpen.value
+  if (isParentSelectOpen.value) {
+    // 每次打开时重置高亮选项
+    const currentIndex = potentialParentServers.value.findIndex(p => p.ip === currentServerData.value.parent_ip);
+    activeParentIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 因为第一个是“无”
+  } else {
+    activeParentIndex.value = -1;
+  }
+}
+
+/**
+ * @description (优化) 处理父服务器下拉框的键盘导航
+ */
+function handleParentSelectKeydown(event) {
+  if (!isParentSelectOpen.value) return;
+
+  const optionsCount = potentialParentServers.value.length + 1; // +1 for the "none" option
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    activeParentIndex.value = (activeParentIndex.value + 1) % optionsCount;
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    activeParentIndex.value = (activeParentIndex.value - 1 + optionsCount) % optionsCount;
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    if (activeParentIndex.value >= 0) {
+      const selectedIp = activeParentIndex.value === 0 ? '' : potentialParentServers.value[activeParentIndex.value - 1].ip;
+      if (selectedIp !== editingServerIp.value) { // 确保不会将自己设为父级
+          selectParent(selectedIp);
+      }
+    }
+  }
+  // 确保高亮选项在可视区域内
+  nextTick(() => {
+      const highlightedElement = parentSelectOptionsRef.value?.querySelector('.is-active');
+      highlightedElement?.scrollIntoView({ block: 'nearest' });
+  });
 }
 
 /**
@@ -523,7 +610,42 @@ function handleClickOutsideParentSelect(event) {
  * @description 切换快捷预设下拉框的显示
  */
 function togglePresetSelect() {
-  isPresetSelectOpen.value = !isPresetSelectOpen.value
+  isPresetSelectOpen.value = !isPresetSelectOpen.value;
+  if (isPresetSelectOpen.value) {
+    const presetKeys = Object.keys(presets);
+    const currentIndex = presetKeys.indexOf(currentServerData.value.selectedPreset);
+    activePresetIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 for "custom"
+  } else {
+    activePresetIndex.value = -1;
+  }
+}
+
+/**
+ * @description (优化) 处理预设下拉框的键盘导航
+ */
+function handlePresetSelectKeydown(event) {
+    if (!isPresetSelectOpen.value) return;
+
+    const optionsCount = Object.keys(presets).length + 1; // +1 for "custom"
+    if (event.key === 'ArrowDown') {
+        event.preventDefault();
+        activePresetIndex.value = (activePresetIndex.value + 1) % optionsCount;
+    } else if (event.key === 'ArrowUp') {
+        event.preventDefault();
+        activePresetIndex.value = (activePresetIndex.value - 1 + optionsCount) % optionsCount;
+    } else if (event.key === 'Enter') {
+        event.preventDefault();
+        if (activePresetIndex.value >= 0) {
+            const presetKeys = Object.keys(presets);
+            const selectedKey = activePresetIndex.value === 0 ? '' : presetKeys[activePresetIndex.value - 1];
+            selectPreset(selectedKey);
+        }
+    }
+    // 确保高亮选项在可视区域内
+    nextTick(() => {
+        const highlightedElement = presetSelectOptionsRef.value?.querySelector('.is-active');
+        highlightedElement?.scrollIntoView({ block: 'nearest' });
+    });
 }
 
 /**
@@ -536,6 +658,7 @@ function selectPreset(presetKey) {
     applyPreset(currentServerData.value)
   }
   isPresetSelectOpen.value = false
+  activePresetIndex.value = -1; // 重置
   presetSelectTriggerRef.value?.focus()
 }
 
@@ -643,96 +766,80 @@ function buildTree(flatList) {
 // --- (D) 核心逻辑 (Core Logic) ---
 
 /**
- * @description 解析 JSON 字符串并设置到 `config` 状态中。
- * (已修复：增加导入时扁平化逻辑)
+ * @description 解析 JSON 字符串并设置到 `config` 状态中。(已重构)
+ * @returns {boolean} - 解析和加载是否成功。
  */
 function parseAndSetConfig(jsonString) {
-  try {
-    const data = JSON.parse(jsonString)
+  // (优化) 将内部逻辑拆分为独立的、可测试的函数
+  function flattenImportedServers(servers, parentIp = "") {
+    if (!Array.isArray(servers)) return [];
+    const flatList = [];
+    servers.forEach(s => {
+      s.parent_ip = s.parent_ip || parentIp;
+      const children = s.children;
+      delete s.children;
+      flatList.push(s);
+      if (children) {
+        flatList.push(...flattenImportedServers(children, s.ip));
+      }
+    });
+    return flatList;
+  }
 
-    // (v17.34) 定义一个包含所有默认值的结构
+  function processAndValidate(flatList) {
+    const ipSet = new Set();
+    const duplicates = [];
+    flatList.forEach(s => {
+      if (!s.ip) {
+        throw new Error('导入失败：存在没有 IP 地址的服务器条目。');
+      }
+      if (ipSet.has(s.ip)) {
+        duplicates.push(s.ip);
+      }
+      ipSet.add(s.ip);
+
+      // 补全 UI 辅助属性
+      s.tag_color_with_hash = (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888';
+      s.selectedPreset = "";
+      s.ignore_in_list = s.ignore_in_list || false;
+      s.comment = s.comment || "";
+    });
+
+    if (duplicates.length > 0) {
+      throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
+    }
+    
+    // 按 priority 排序
+    return flatList.sort((a, b) => (a.priority || 0) - (b.priority || 0));
+  }
+
+  try {
+    if (!jsonString.trim()) {
+        jsonString = '{}'; // 处理空字符串或只有空格的输入
+    }
+    const data = JSON.parse(jsonString);
     const defaultConfig = {
       footer: "",
       servers: [],
       show_offline_by_default: false
-    }
+    };
 
-    // --- (v_Fix) 新增：扁平化函数 ---
-    // 定义一个函数来递归地扁平化服务器列表
-    const flatList = [];
-    function flattenImportedServers(servers, parentIp = "") {
-      if (!Array.isArray(servers)) return;
-
-      servers.forEach(s => {
-        // 1. 为当前服务器设置 parent_ip
-        // (优先使用自己的 parent_ip，否则继承父级的 ip)
-        s.parent_ip = s.parent_ip || parentIp;
-
-        // 2. 递归处理子服务器 (如果有)
-        const children = s.children; // 暂存子服
-        delete s.children; // 从对象中移除 children 数组
-
-        // 3. 将当前服务器添加到扁平列表
-        flatList.push(s);
-
-        // 4. 递归调用
-        if (children) {
-          flattenImportedServers(children, s.ip); // 传入当前 ip 作为 parentIp
-        }
-      });
-    }
-    // --- (v_Fix) 扁平化函数结束 ---
-
-    const finalServers = []; // 存储最终扁平化、处理过的服务器
-
+    let finalServers = [];
     if (data.servers && Array.isArray(data.servers)) {
-
-      // --- (v_Fix) 运行扁平化 ---
-      // 无论导入的 data.servers 是扁平的还是嵌套的，
-      // 运行后 flatList 都会是一个扁平的列表。
-      flattenImportedServers(data.servers);
-
-      const ipSet = new Set();
-      const duplicates = [];
-
-      // --- (v_Fix) 遍历 `flatList` 而不是 `data.servers` ---
-      flatList.forEach((s) => {
-        if (ipSet.has(s.ip)) {
-          duplicates.push(s.ip);
-        }
-        ipSet.add(s.ip);
-
-        // 补全 UI 辅助属性
-        s.tag_color_with_hash = (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888'
-        s.selectedPreset = ""
-        // (v_Fix) 不再需要 s.parent_ip = s.parent_ip || ""，因为扁平化时已处理
-        s.ignore_in_list = s.ignore_in_list || false
-        s.comment = s.comment || ""
-      })
-
-      if (duplicates.length > 0) {
-        throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址 (在扁平化后)。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
-      }
-
-      // (v_Fix) 按 priority 排序 (如果存在)
-      // 拖拽后会自动重新生成 priority，这里只是尽力保持导入时的顺序
-      flatList.sort((a, b) => (a.priority || 0) - (b.priority || 0))
-
-      finalServers.push(...flatList);
-
-    } else {
-      // data.servers = [] // 旧逻辑
+      const flatList = flattenImportedServers(data.servers);
+      finalServers = processAndValidate(flatList);
     }
 
-    // (v17.34) 核心：使用默认值填充 config，然后用加载的 data 覆盖它
     config.value = {
       ...defaultConfig,
       ...data,
-      servers: finalServers // (v_Fix) 使用扁平化和处理过的 `finalServers`
-    }
-
+      servers: finalServers
+    };
+    
+    return true; // 表示成功
   } catch (e) {
-    showAlert(e.message, "导入失败")
+    showAlert(e.message, "导入失败");
+    return false; // 表示失败
   }
 }
 
@@ -740,7 +847,10 @@ function parseAndSetConfig(jsonString) {
  * @description “加载配置”按钮的点击事件处理器。
  */
 function loadConfig() {
-  parseAndSetConfig(jsonInput.value)
+  const success = parseAndSetConfig(jsonInput.value);
+  if (success) {
+    showAlert(`配置已成功加载！\n共导入 ${config.value.servers.length} 个服务器。`, '导入成功');
+  }
 }
 
 /**
@@ -1245,7 +1355,9 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="presetSelectTriggerRef"
-                      @click="togglePresetSelect" aria-haspopup="listbox" :aria-expanded="isPresetSelectOpen">
+                      @click="togglePresetSelect" @keydown="handlePresetSelectKeydown" 
+                      aria-haspopup="listbox" :aria-expanded="isPresetSelectOpen"
+                      :aria-activedescendant="isPresetSelectOpen && activePresetIndex > -1 ? `preset-option-${activePresetIndex}` : null">
 
                       <span v-if="selectedPresetObject" class="selected-option-content">
                         <span class="simple-tag-small" :style="{
@@ -1263,13 +1375,15 @@ onBeforeUnmount(() => {
                       <ul v-if="isPresetSelectOpen" class="custom-select-options" ref="presetSelectOptionsRef"
                         role="listbox">
 
-                        <li class="custom-select-option" :class="{ 'is-selected': !currentServerData.selectedPreset }"
+                        <li :id="`preset-option-0`" class="custom-select-option" 
+                          :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
                           @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
                           <span class="option-placeholder">-- 自定义 --</span>
                         </li>
 
-                        <li v-for="(preset, key) in presets" :key="key" class="custom-select-option" :class="{
-                          'is-selected': currentServerData.selectedPreset === key
+                        <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`" class="custom-select-option" :class="{
+                          'is-selected': currentServerData.selectedPreset === key,
+                          'is-active': activePresetIndex === index + 1
                         }" @click="selectPreset(key)" role="option"
                           :aria-selected="currentServerData.selectedPreset === key">
 
@@ -1297,9 +1411,11 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="parentSelectTriggerRef"
-                      @click="toggleParentSelect" :disabled="(modalMode === 'edit' && currentServerData.children && currentServerData.children.length > 0) ||
+                      @click="toggleParentSelect" @keydown="handleParentSelectKeydown"
+                      :disabled="(modalMode === MODAL_MODE.EDIT && currentServerData.children && currentServerData.children.length > 0) ||
                         (potentialParentServers.length === 0)
-                        " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen">
+                        " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen"
+                        :aria-activedescendant="isParentSelectOpen && activeParentIndex > -1 ? `parent-option-${activeParentIndex}` : null">
 
                       <span v-if="selectedParent" class="selected-option-content">
                         <span v-if="selectedParent.tag" class="simple-tag-small" :style="{
@@ -1321,15 +1437,18 @@ onBeforeUnmount(() => {
                       <ul v-if="isParentSelectOpen" class="custom-select-options is-parent-select"
                         ref="parentSelectOptionsRef" role="listbox">
 
-                        <li class="custom-select-option" :class="{ 'is-selected': !currentServerData.parent_ip }"
+                        <li :id="`parent-option-0`" class="custom-select-option" 
+                          :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
                           @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
                           <span class="option-placeholder">-- 默认为根服务器 --</span>
                         </li>
 
-                        <li v-for="parent in potentialParentServers" :key="parent.ip" class="custom-select-option"
+                        <li v-for="(parent, index) in potentialParentServers" :key="parent.ip" 
+                          :id="`parent-option-${index + 1}`" class="custom-select-option"
                           :class="{
                             'is-selected': currentServerData.parent_ip === parent.ip,
-                            'is-disabled': parent.ip === editingServerIp
+                            'is-disabled': parent.ip === editingServerIp,
+                            'is-active': activeParentIndex === index + 1
                           }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)" role="option"
                           :aria-selected="currentServerData.parent_ip === parent.ip"
                           :aria-disabled="parent.ip === editingServerIp">
@@ -1380,8 +1499,10 @@ onBeforeUnmount(() => {
             <button @click="closeServerModal" class="btn-modal-cancel" type="button">
               <font-awesome-icon :icon="faTimes" /> 取消
             </button>
-            <button @click="saveServer" class="btn-modal-confirm" type="button">
-              <font-awesome-icon :icon="faSave" /> {{ modalMode === 'add' ? '确认添加' : '保存更改' }}
+            <button @click="saveServer" class="btn-modal-confirm" type="button" :disabled="isSaving">
+              <font-awesome-icon :icon="isSaving ? faSpinner : faSave" :spin="isSaving" />
+              <span v-if="isSaving">正在保存...</span>
+              <span v-else>{{ modalMode === MODAL_MODE.ADD ? '确认添加' : '保存更改' }}</span>
             </button>
           </div>
 
@@ -2636,7 +2757,11 @@ textarea {
 }
 
 .custom-select-option:hover {
-  background: var(--color-surface-muted);
+  background-color: var(--color-body-gradient-start);
+}
+
+.custom-select-option.is-active {
+  background-color: var(--color-body-gradient-start);
 }
 
 .custom-select-option.is-selected {
