@@ -1,6 +1,6 @@
-<script setup>
+<script setup lang="ts">
 // --- 1. 导入依赖 ---
-import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, nextTick, watch, onMounted, onBeforeUnmount, type Ref } from 'vue'
 import draggable from 'vuedraggable'
 import { FontAwesomeIcon } from '@fortawesome/vue-fontawesome'
 import {
@@ -19,12 +19,35 @@ import {
 } from '@fortawesome/free-solid-svg-icons'
 import { ColorPicker } from 'vue3-colorpicker'
 import 'vue3-colorpicker/style.css'
+
+// --- (TS) 核心数据结构定义 ---
+interface Server {
+  ip: string;
+  comment: string;
+  tag: string;
+  tag_color: string;
+  tag_color_with_hash: string;
+  server_type: 'standalone' | 'parent' | 'child';
+  parent_ip: string;
+  selectedPreset: string;
+  ignore_in_list: boolean;
+  priority?: number; // 拖拽时生成
+  children: Server[]; // 用于 serverTree
+}
+
+interface AppConfig {
+  footer: string;
+  servers: Server[];
+  show_offline_by_default: boolean;
+}
+
+
 // --- 2. 静态配置数据 ---
 
 /**
  * @description 预设服务器标签
  */
-const presets = {
+const presets: Record<string, { tag: string; tag_color_with_hash: string }> = {
   "lobby": { tag: "大厅", tag_color_with_hash: "#3498DB" },
   "survival": { tag: "生存", tag_color_with_hash: "#2ECC71" },
   "creative": { tag: "创造", tag_color_with_hash: "#F1C40F" },
@@ -36,7 +59,7 @@ const presets = {
 /**
  * @description (v16 重构) serverTypes 和 labels 仅用于显示
  */
-const serverTypeLabels = {
+const serverTypeLabels: Record<string, string> = {
   standalone: '独立服务器',
   parent: '父服务器',
   child: '子服务器'
@@ -46,13 +69,13 @@ const serverTypeLabels = {
 
 // --- 3. 核心响应式状态 ---
 
-const config = ref({
+const config = ref<AppConfig>({
   footer: "",
   servers: [],
   show_offline_by_default: false // (v17.34) 新增：全局配置
 })
 
-const serverTree = ref([])
+const serverTree = ref<Server[]>([])
 
 const jsonInput = ref(``)
 
@@ -62,7 +85,7 @@ const isDarkMode = ref(false)
 /**
  * @description 将主题应用到 <html> 标签
  */
-function applyTheme(isDark) {
+function applyTheme(isDark: boolean) {
   if (isDark) {
     document.documentElement.classList.add('dark-mode')
     isDarkMode.value = true
@@ -90,31 +113,36 @@ const isModalVisible = ref(false)
 const modalTitle = ref('')
 const modalMessage = ref('')
 const modalType = ref('alert')
-const modalResolve = ref(null)
+const modalResolve = ref<((value: boolean | PromiseLike<boolean>) => void) | null>(null)
 
 // --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗状态 ---
 const isServerModalVisible = ref(false) // 控制新弹窗的显示与隐藏
-const modalMode = ref('add')            // 'add' 或 'edit'
-const currentServerData = ref(null)     // 存储正在添加/编辑的服务器数据 (副本)
-const editingServerIp = ref(null)       // 存储原始 IP，用于编辑时的唯一性检验
+const modalMode = ref<'add' | 'edit'>('add') // 'add' 或 'edit'
+const currentServerData = ref<Partial<Server> | null>(null) // 存储正在添加/编辑的服务器数据 (副本)
+const editingServerIp = ref<string | null>(null) // 存储原始 IP，用于编辑时的唯一性检验
 const isSaving = ref(false)             // (优化) 保存按钮的加载状态
-const alertModalRef = ref(null)         // Alert/Confirm 弹窗容器
-const serverModalRef = ref(null)        // 服务器编辑弹窗容器
+const alertModalRef = ref<HTMLElement | null>(null)         // Alert/Confirm 弹窗容器
+const serverModalRef = ref<HTMLElement | null>(null)        // 服务器编辑弹窗容器
 
 // (优化) 自定义下拉框 A11y 状态
 const isParentSelectOpen = ref(false)
 const activeParentIndex = ref(-1)
 
-const parentSelectTriggerRef = ref(null) // 触发器按钮
-const parentSelectOptionsRef = ref(null) // 选项列表
+const parentSelectTriggerRef = ref<HTMLElement | null>(null) // 触发器按钮
+const parentSelectOptionsRef = ref<HTMLElement | null>(null) // 选项列表
 const isPresetSelectOpen = ref(false)
-const presetSelectTriggerRef = ref(null)
-const presetSelectOptionsRef = ref(null)
+const presetSelectTriggerRef = ref<HTMLElement | null>(null)
+const presetSelectOptionsRef = ref<HTMLElement | null>(null)
 const activePresetIndex = ref(-1)
 const isColorPickerOpen = ref(false)
-const colorPickerTriggerRef = ref(null)
-const colorPickerPanelRef = ref(null)
-let cancelModalTimeout = null           // 统一的弹窗清理句柄
+const colorPickerTriggerRef = ref<HTMLElement | null>(null)
+const colorPickerPanelRef = ref<HTMLElement | null>(null)
+let cancelModalTimeout: number | null = null;           // 统一的弹窗清理句柄
+
+// (优化) Toast 小提示状态
+const isToastVisible = ref(false);
+const toastMessage = ref('');
+let toastTimeout: number | null = null;
 
 // (优化) 使用常量替代魔法字符串，提高代码可维护性
 const MODAL_MODE = Object.freeze({ ADD: 'add', EDIT: 'edit' });
@@ -129,12 +157,12 @@ const modalIds = {
 
 const focusableSelectors = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex^="-"])'
 
-function focusFirstWithin(containerRef) {
+function focusFirstWithin(containerRef: Ref<HTMLElement | null> | HTMLElement) {
   nextTick(() => {
-    const container = containerRef?.value ?? containerRef
+    const container = containerRef instanceof HTMLElement ? containerRef : containerRef?.value;
     if (!container) return
-    const preferred = container.querySelector('[data-autofocus]')
-    const fallback = container.querySelector(focusableSelectors)
+    const preferred = container.querySelector('[data-autofocus]') as HTMLElement | null
+    const fallback = container.querySelector(focusableSelectors) as HTMLElement | null
     const target = preferred || fallback || container
     target.focus()
   })
@@ -150,10 +178,10 @@ watch(isServerModalVisible, (visible) => {
   focusFirstWithin(serverModalRef)
 })
 
-function trapFocus(event, containerRef) {
-  const container = containerRef?.value ?? containerRef
+function trapFocus(event: KeyboardEvent, containerRef: Ref<HTMLElement | null> | HTMLElement) {
+  const container = containerRef instanceof HTMLElement ? containerRef : containerRef?.value;
   if (!container) return
-  const focusable = container.querySelectorAll(focusableSelectors)
+  const focusable = Array.from(container.querySelectorAll(focusableSelectors)) as HTMLElement[];
   if (focusable.length === 0) {
     event.preventDefault()
     container.focus()
@@ -161,19 +189,19 @@ function trapFocus(event, containerRef) {
   }
   const first = focusable[0]
   const last = focusable[focusable.length - 1]
-  const active = document.activeElement
+  const active = document.activeElement as HTMLElement | null;
   if (event.shiftKey) {
     if (active === first || active === container) {
       event.preventDefault()
-      last.focus()
+      last?.focus()
     }
   } else if (active === last) {
     event.preventDefault()
-    first.focus()
+    first?.focus()
   }
 }
 
-function handleGlobalKeydown(event) {
+function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
     if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
       event.preventDefault()
@@ -182,19 +210,19 @@ function handleGlobalKeydown(event) {
     // --- (v17.7 新增) 其次检查颜色选择器 ---
     else if (isColorPickerOpen.value) {
       event.preventDefault()
-      isColorPickerOpen.value = false
-      colorPickerTriggerRef.value?.focus()
+      isColorPickerOpen.value = false;
+      (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
     }
     // --- 结束 ---
     else if (isPresetSelectOpen.value) { // (v17.2) 其次检查预设下拉框
       event.preventDefault()
-      isPresetSelectOpen.value = false
-      presetSelectTriggerRef.value?.focus()
+      isPresetSelectOpen.value = false;
+      (presetSelectTriggerRef.value as HTMLElement | null)?.focus()
     }
     else if (isParentSelectOpen.value) { // (v17) 其次检查父服下拉框
       event.preventDefault()
-      isParentSelectOpen.value = false
-      parentSelectTriggerRef.value?.focus() // 焦点返回触发器
+      isParentSelectOpen.value = false;
+      (parentSelectTriggerRef.value as HTMLElement | null)?.focus() // 焦点返回触发器
     }
     else if (isServerModalVisible.value) {
       event.preventDefault()
@@ -229,7 +257,7 @@ function handleGlobalKeydown(event) {
 /**
  * @description 计算出所有可以作为“父服务器”的服务器。
  */
-const potentialParentServers = computed(() => {
+const potentialParentServers = computed<Server[]>(() => {
   if (!config.value.servers) return []
   return config.value.servers.filter(s => s.server_type === SERVER_TYPE.PARENT || s.server_type === SERVER_TYPE.STANDALONE)
 })
@@ -238,33 +266,31 @@ const potentialParentServers = computed(() => {
  * @description 计算出最终用于“导出”的 JSON 字符串。
  * (v_Fix) 修改为导出 'serverTree' (嵌套结构) 以方便后端渲染。
  */
-const outputJson = computed(() => {
+const outputJson = computed<string>(() => {
 
   /**
    * 递归清理节点函数
    * @param {object} serverNode - 来自 serverTree 的一个服务器节点
    * @returns {object} 清理后的节点
    */
-  function cleanNode(serverNode) {
-    // 1. 复制节点，但不包括 UI 辅助属性
+  function cleanNode(serverNode: Server): Partial<Server> {
+    // 1. 复制节点，但不包括 UI 辅助属性 和 children (暂时)
     const {
       tag_color_with_hash,
       selectedPreset,
+      children,
       ...cleanServer
     } = serverNode;
 
     // 2. 需求 3: 清理 ignore_in_list (如果为 false)
     if (cleanServer.ignore_in_list === false) {
-      delete cleanServer.ignore_in_list;
+      delete (cleanServer as Partial<Server>).ignore_in_list;
     }
 
     // 3. 递归处理子节点
-    if (cleanServer.children && cleanServer.children.length > 0) {
+    if (children && children.length > 0) {
       // 递归调用 cleanNode 来清理所有子节点
-      cleanServer.children = cleanServer.children.map(cleanNode);
-    } else {
-      // 需求 2: 如果没有子节点，则删除 "children" 属性
-      delete cleanServer.children;
+      (cleanServer as Server).children = children.map(cleanNode) as Server[];
     }
 
     return cleanServer;
@@ -288,19 +314,19 @@ const outputJson = computed(() => {
 /**
  * @description (v17) 计算当前选中的父服务器对象，用于自定义下拉框显示
  */
-const selectedParent = computed(() => {
+const selectedParent = computed<Server | undefined>(() => {
   if (!currentServerData.value || !currentServerData.value.parent_ip) {
-    return null
+    return undefined
   }
-  return potentialParentServers.value.find(p => p.ip === currentServerData.value.parent_ip)
+  return potentialParentServers.value.find(p => p.ip === currentServerData.value?.parent_ip)
 })
 
 /**
  * @description (v17.2) 计算当前选中的预设对象，用于自定义下拉框显示
  */
-const selectedPresetObject = computed(() => {
+const selectedPresetObject = computed<{ tag: string; tag_color_with_hash: string; } | undefined>(() => {
   if (!currentServerData.value || !currentServerData.value.selectedPreset) {
-    return null
+    return undefined
   }
   return presets[currentServerData.value.selectedPreset]
 })
@@ -309,14 +335,14 @@ const selectedPresetObject = computed(() => {
 
 // --- (A) 通用 Alert/Confirm 弹窗方法 ---
 
-function showAlert(message, title = '提示') {
+function showAlert(message: string, title = '提示') {
   modalTitle.value = title
   modalMessage.value = message
   modalType.value = 'alert'
   isModalVisible.value = true
 }
 
-function showConfirm(message, title = '请确认') {
+function showConfirm(message: string, title = '请确认'): Promise<boolean> {
   modalTitle.value = title
   modalMessage.value = message
   modalType.value = 'confirm'
@@ -329,7 +355,7 @@ function showConfirm(message, title = '请确认') {
 function onModalConfirm() {
   isModalVisible.value = false
   if (modalResolve.value) {
-    modalResolve.value(true)
+    (modalResolve.value as (value: boolean) => void)(true)
   }
   modalResolve.value = null
 }
@@ -342,6 +368,26 @@ function onModalCancel() {
   modalResolve.value = null
 }
 
+/**
+ * @description (优化) 显示一个短暂的 Toast 提示
+ * @param message - 要显示的消息
+ */
+function showToast(message: string) {
+  // 如果当前有提示正在显示，先清除旧的计时器
+  if (toastTimeout) {
+    clearTimeout(toastTimeout);
+  }
+
+  toastMessage.value = message;
+  isToastVisible.value = true;
+
+  // 3秒后自动隐藏
+  toastTimeout = window.setTimeout(() => {
+    isToastVisible.value = false;
+    toastTimeout = null;
+  }, 3000);
+}
+
 // --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗方法 ---
 
 /**
@@ -349,7 +395,7 @@ function onModalCancel() {
  * @param {object | null} parentServer - 如果是添加子服，传入父服对象
  * @returns {object} 一个新的服务器数据对象。
  */
-function createBlankServer(parentServer = null) {
+function createBlankServer(parentServer: Server | null = null): Partial<Server> {
   return {
     ip: "",
     comment: "",
@@ -360,6 +406,7 @@ function createBlankServer(parentServer = null) {
     parent_ip: parentServer ? parentServer.ip : "", // (v16) 预设 parent_ip
     selectedPreset: "",
     ignore_in_list: false,
+    children: [] // 确保 children 存在
   }
 }
 
@@ -368,12 +415,14 @@ function createBlankServer(parentServer = null) {
  * @param {object | null} [serverToEdit=null] - 要编辑的服务器对象。如果为 null，则为添加模式。
  * @param {object | null} [parentServer=null] - (仅添加模式) 如果要添加子服，传入父服。
  */
-async function openServerModal(serverToEdit = null, parentServer = null) {
+async function openServerModal(serverToEdit: Server | null = null, parentServer: Server | null = null) {
   // 1. (竞争条件修复) 清除任何待处理的关闭超时
   if (cancelModalTimeout) {
     clearTimeout(cancelModalTimeout)
     cancelModalTimeout = null
   }
+
+  isSaving.value = false; // 重置保存状态
 
   // 2. 先清空数据 (确保 v-if 触发)
   currentServerData.value = null
@@ -410,7 +459,7 @@ function closeServerModal() {
   }
 
   // 启动超时清理
-  cancelModalTimeout = setTimeout(() => {
+  cancelModalTimeout = window.setTimeout(() => {
     currentServerData.value = null
     editingServerIp.value = null
     cancelModalTimeout = null
@@ -423,13 +472,13 @@ function closeServerModal() {
  * @param {string} newParentIp - 计划设置的父服务器 IP。
  * @returns {boolean} - 如果会造成循环则返回 true。
  */
-function checkForCircularDependency(serverIp, newParentIp) {
+function checkForCircularDependency(serverIp: string, newParentIp: string): boolean {
   if (!newParentIp || serverIp === newParentIp) {
     return false; // 没有父级或父级是自己，不算循环 (由其他验证处理)
   }
 
-  let currentIp = newParentIp;
-  const visited = new Set([serverIp]); // 将当前节点加入访问集合
+  let currentIp: string | undefined = newParentIp;
+  const visited = new Set<string>([serverIp]); // 将当前节点加入访问集合
 
   while (currentIp) {
     if (visited.has(currentIp)) {
@@ -438,7 +487,7 @@ function checkForCircularDependency(serverIp, newParentIp) {
     visited.add(currentIp);
 
     const parentServer = config.value.servers.find(s => s.ip === currentIp);
-    currentIp = parentServer ? parentServer.parent_ip : null;
+    currentIp = parentServer ? parentServer.parent_ip : undefined;
   }
 
   return false;
@@ -452,7 +501,7 @@ async function saveServer() {
   if (!currentServerData.value || isSaving.value) return;
 
   isSaving.value = true;
-  const server = currentServerData.value;
+  const server = currentServerData.value as Server;
   const newIp = (server.ip || "").trim();
 
   // --- 1. 验证 ---
@@ -527,7 +576,7 @@ async function saveServer() {
     }
   } else {
     // 添加新服务器
-    config.value.servers.push(server);
+    config.value.servers.push(server as Server);
   }
 
   // --- 4. 收尾 ---
@@ -535,7 +584,7 @@ async function saveServer() {
   await new Promise(resolve => setTimeout(resolve, 200));
   isSaving.value = false;
   closeServerModal();
-  showAlert(modalMode.value === MODAL_MODE.ADD ? '服务器已成功添加！' : '服务器已成功更新！', '保存成功');
+  showToast(modalMode.value === MODAL_MODE.ADD ? '服务器已成功添加！' : '服务器已成功更新！');
 }
 
 /**
@@ -545,7 +594,7 @@ function toggleParentSelect() {
   isParentSelectOpen.value = !isParentSelectOpen.value
   if (isParentSelectOpen.value) {
     // 每次打开时重置高亮选项
-    const currentIndex = potentialParentServers.value.findIndex(p => p.ip === currentServerData.value.parent_ip);
+    const currentIndex = potentialParentServers.value.findIndex(p => p.ip === currentServerData.value?.parent_ip);
     activeParentIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 因为第一个是“无”
   } else {
     activeParentIndex.value = -1;
@@ -555,7 +604,7 @@ function toggleParentSelect() {
 /**
  * @description (优化) 处理父服务器下拉框的键盘导航
  */
-function handleParentSelectKeydown(event) {
+function handleParentSelectKeydown(event: KeyboardEvent) {
   if (!isParentSelectOpen.value) return;
 
   const optionsCount = potentialParentServers.value.length + 1; // +1 for the "none" option
@@ -568,39 +617,41 @@ function handleParentSelectKeydown(event) {
   } else if (event.key === 'Enter') {
     event.preventDefault();
     if (activeParentIndex.value >= 0) {
-      const selectedIp = activeParentIndex.value === 0 ? '' : potentialParentServers.value[activeParentIndex.value - 1].ip;
+      const selectedIp = activeParentIndex.value === 0
+        ? ''
+        : (potentialParentServers.value[activeParentIndex.value - 1]?.ip ?? '');
       if (selectedIp !== editingServerIp.value) { // 确保不会将自己设为父级
-          selectParent(selectedIp);
+        selectParent(selectedIp);
       }
     }
   }
   // 确保高亮选项在可视区域内
   nextTick(() => {
-      const highlightedElement = parentSelectOptionsRef.value?.querySelector('.is-active');
-      highlightedElement?.scrollIntoView({ block: 'nearest' });
+    const highlightedElement = parentSelectOptionsRef.value?.querySelector('.is-active');
+    highlightedElement?.scrollIntoView({ block: 'nearest' });
   });
 }
 
 /**
  * @description 选择一个新的父服务器
  */
-function selectParent(parentIp) {
+function selectParent(parentIp: string) {
   if (currentServerData.value) {
     currentServerData.value.parent_ip = parentIp
   }
   isParentSelectOpen.value = false
-  // 将焦点返回给触发器按钮
-  parentSelectTriggerRef.value?.focus()
+    // 将焦点返回给触发器按钮
+    ; (parentSelectTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 /**
  * @description (v17) 处理点击外部以关闭自定义下拉框
  */
-function handleClickOutsideParentSelect(event) {
+function handleClickOutsideParentSelect(event: MouseEvent) {
   if (
     isParentSelectOpen.value &&
-    parentSelectTriggerRef.value && !parentSelectTriggerRef.value.contains(event.target) &&
-    parentSelectOptionsRef.value && !parentSelectOptionsRef.value.contains(event.target)
+    parentSelectTriggerRef.value && !(parentSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
+    parentSelectOptionsRef.value && !(parentSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
   ) {
     isParentSelectOpen.value = false
   }
@@ -613,7 +664,7 @@ function togglePresetSelect() {
   isPresetSelectOpen.value = !isPresetSelectOpen.value;
   if (isPresetSelectOpen.value) {
     const presetKeys = Object.keys(presets);
-    const currentIndex = presetKeys.indexOf(currentServerData.value.selectedPreset);
+    const currentIndex = presetKeys.indexOf(currentServerData.value?.selectedPreset || '');
     activePresetIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 for "custom"
   } else {
     activePresetIndex.value = -1;
@@ -623,53 +674,53 @@ function togglePresetSelect() {
 /**
  * @description (优化) 处理预设下拉框的键盘导航
  */
-function handlePresetSelectKeydown(event) {
-    if (!isPresetSelectOpen.value) return;
+function handlePresetSelectKeydown(event: KeyboardEvent) {
+  if (!isPresetSelectOpen.value) return;
 
-    const optionsCount = Object.keys(presets).length + 1; // +1 for "custom"
-    if (event.key === 'ArrowDown') {
-        event.preventDefault();
-        activePresetIndex.value = (activePresetIndex.value + 1) % optionsCount;
-    } else if (event.key === 'ArrowUp') {
-        event.preventDefault();
-        activePresetIndex.value = (activePresetIndex.value - 1 + optionsCount) % optionsCount;
-    } else if (event.key === 'Enter') {
-        event.preventDefault();
-        if (activePresetIndex.value >= 0) {
-            const presetKeys = Object.keys(presets);
-            const selectedKey = activePresetIndex.value === 0 ? '' : presetKeys[activePresetIndex.value - 1];
-            selectPreset(selectedKey);
-        }
+  const optionsCount = Object.keys(presets).length + 1; // +1 for "custom"
+  if (event.key === 'ArrowDown') {
+    event.preventDefault();
+    activePresetIndex.value = (activePresetIndex.value + 1) % optionsCount;
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault();
+    activePresetIndex.value = (activePresetIndex.value - 1 + optionsCount) % optionsCount;
+  } else if (event.key === 'Enter') {
+    event.preventDefault();
+    if (activePresetIndex.value >= 0) {
+      const presetKeys = Object.keys(presets);
+      const selectedKey = activePresetIndex.value === 0 ? '' : presetKeys[activePresetIndex.value - 1];
+      selectPreset(selectedKey as string);
     }
-    // 确保高亮选项在可视区域内
-    nextTick(() => {
-        const highlightedElement = presetSelectOptionsRef.value?.querySelector('.is-active');
-        highlightedElement?.scrollIntoView({ block: 'nearest' });
-    });
+  }
+  // 确保高亮选项在可视区域内
+  nextTick(() => {
+    const highlightedElement = (presetSelectOptionsRef.value as HTMLElement | null)?.querySelector('.is-active');
+    (highlightedElement as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
+  });
 }
 
 /**
  * @description 选择一个新的预设
  */
-function selectPreset(presetKey) {
+function selectPreset(presetKey: string) {
   if (currentServerData.value) {
     currentServerData.value.selectedPreset = presetKey
     // 关键: 选择后要立即应用 (applyPreset 会处理空 key)
-    applyPreset(currentServerData.value)
+    applyPreset(currentServerData.value as Server)
   }
   isPresetSelectOpen.value = false
   activePresetIndex.value = -1; // 重置
-  presetSelectTriggerRef.value?.focus()
+  ; (presetSelectTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 /**
  * @description (v17.2) 处理点击外部以关闭快捷预设下拉框
  */
-function handleClickOutsidePresetSelect(event) {
+function handleClickOutsidePresetSelect(event: MouseEvent) {
   if (
     isPresetSelectOpen.value &&
-    presetSelectTriggerRef.value && !presetSelectTriggerRef.value.contains(event.target) &&
-    presetSelectOptionsRef.value && !presetSelectOptionsRef.value.contains(event.target)
+    presetSelectTriggerRef.value && !(presetSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
+    presetSelectOptionsRef.value && !(presetSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
   ) {
     isPresetSelectOpen.value = false
   }
@@ -697,7 +748,7 @@ function toggleColorPicker() {
  */
 function closeColorPicker() {
   isColorPickerOpen.value = false
-  colorPickerTriggerRef.value?.focus() // 焦点返回
+    ; (colorPickerTriggerRef.value as HTMLElement | null)?.focus() // 焦点返回
 }
 
 
@@ -713,7 +764,7 @@ watch(isPresetSelectOpen, (isOpen) => {
 
 // --- (C) 辅助函数 (Helpers) ---
 
-function getContrastColor(hexColor) {
+function getContrastColor(hexColor: string): string {
   if (!hexColor || hexColor.length < 7) return '#000000';
   const r = parseInt(hexColor.substr(1, 2), 16);
   const g = parseInt(hexColor.substr(3, 2), 16);
@@ -722,7 +773,7 @@ function getContrastColor(hexColor) {
   return (yiq >= 128) ? '#000000' : '#FFFFFF';
 }
 
-function sanitizeIpForId(ip) {
+function sanitizeIpForId(ip: string | undefined): string {
   if (!ip) return 'new-server';
   return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
@@ -730,16 +781,16 @@ function sanitizeIpForId(ip) {
 /**
  * @description (v14) 核心重构：将扁平的服务器列表转换为嵌套树形结构。
  */
-function buildTree(flatList) {
-  const map = {}
-  const serversWithChildren = flatList
+function buildTree(flatList: Server[]): Server[] {
+  const map: Record<string, Server> = {}
+  const serversWithChildren: Server[] = flatList
     .map(server => {
       const serverCopy = { ...server, children: [] }
       map[serverCopy.ip] = serverCopy
       return serverCopy
     })
 
-  const tree = []
+  const tree: Server[] = []
 
   serversWithChildren.forEach(server => {
     if (server.parent_ip) {
@@ -769,11 +820,11 @@ function buildTree(flatList) {
  * @description 解析 JSON 字符串并设置到 `config` 状态中。(已重构)
  * @returns {boolean} - 解析和加载是否成功。
  */
-function parseAndSetConfig(jsonString) {
+function parseAndSetConfig(jsonString: string): boolean {
   // (优化) 将内部逻辑拆分为独立的、可测试的函数
-  function flattenImportedServers(servers, parentIp = "") {
+  function flattenImportedServers(servers: any[], parentIp = ""): any[] {
     if (!Array.isArray(servers)) return [];
-    const flatList = [];
+    const flatList: any[] = [];
     servers.forEach(s => {
       s.parent_ip = s.parent_ip || parentIp;
       const children = s.children;
@@ -786,9 +837,11 @@ function parseAndSetConfig(jsonString) {
     return flatList;
   }
 
-  function processAndValidate(flatList) {
-    const ipSet = new Set();
-    const duplicates = [];
+  function processAndValidate(flatList: any[]): Server[] {
+    const ipSet = new Set<string>();
+    const duplicates: string[] = [];
+    const validatedServers: Server[] = [];
+
     flatList.forEach(s => {
       if (!s.ip) {
         throw new Error('导入失败：存在没有 IP 地址的服务器条目。');
@@ -798,33 +851,38 @@ function parseAndSetConfig(jsonString) {
       }
       ipSet.add(s.ip);
 
-      // 补全 UI 辅助属性
-      s.tag_color_with_hash = (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888';
-      s.selectedPreset = "";
-      s.ignore_in_list = s.ignore_in_list || false;
-      s.comment = s.comment || "";
+      // 补全 UI 辅助属性和默认值
+      const server: Partial<Server> = {
+        ...s,
+        tag_color_with_hash: (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#888888',
+        selectedPreset: "",
+        ignore_in_list: s.ignore_in_list || false,
+        comment: s.comment || "",
+        children: []
+      };
+      validatedServers.push(server as Server);
     });
 
     if (duplicates.length > 0) {
       throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
     }
-    
+
     // 按 priority 排序
-    return flatList.sort((a, b) => (a.priority || 0) - (b.priority || 0));
+    return validatedServers.sort((a, b) => (a.priority || 0) - (b.priority || 0));
   }
 
   try {
     if (!jsonString.trim()) {
-        jsonString = '{}'; // 处理空字符串或只有空格的输入
+      jsonString = '{}'; // 处理空字符串或只有空格的输入
     }
     const data = JSON.parse(jsonString);
-    const defaultConfig = {
+    const defaultConfig: AppConfig = {
       footer: "",
       servers: [],
       show_offline_by_default: false
     };
 
-    let finalServers = [];
+    let finalServers: Server[] = [];
     if (data.servers && Array.isArray(data.servers)) {
       const flatList = flattenImportedServers(data.servers);
       finalServers = processAndValidate(flatList);
@@ -835,9 +893,9 @@ function parseAndSetConfig(jsonString) {
       ...data,
       servers: finalServers
     };
-    
+
     return true; // 表示成功
-  } catch (e) {
+  } catch (e: any) {
     showAlert(e.message, "导入失败");
     return false; // 表示失败
   }
@@ -846,10 +904,20 @@ function parseAndSetConfig(jsonString) {
 /**
  * @description “加载配置”按钮的点击事件处理器。
  */
-function loadConfig() {
+async function loadConfig() {
+  if (config.value.servers.length > 0) {
+    const confirmed = await showConfirm(
+      '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
+      '覆盖确认'
+    );
+    if (!confirmed) {
+      return; // 用户取消操作
+    }
+  }
+
   const success = parseAndSetConfig(jsonInput.value);
   if (success) {
-    showAlert(`配置已成功加载！\n共导入 ${config.value.servers.length} 个服务器。`, '导入成功');
+    showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
   }
 }
 
@@ -857,10 +925,10 @@ function loadConfig() {
  * @description (v14) 拖拽结束后，重建 `config.value.servers`。
  */
 function flattenTreeAndSync() {
-  const newFlatList = []
+  const newFlatList: Server[] = []
   let priorityCounter = 0
 
-  function traverse(nodes, parentIp = "") {
+  function traverse(nodes: Server[], parentIp = "") {
     if (!nodes) return
 
     nodes.forEach((server) => {
@@ -868,7 +936,7 @@ function flattenTreeAndSync() {
 
       if (parentIp) {
         server.server_type = 'child'
-      } else if (server.children.length > 0) {
+      } else if (server.children && server.children.length > 0) {
         server.server_type = 'parent'
       } else {
         server.server_type = 'standalone'
@@ -878,9 +946,11 @@ function flattenTreeAndSync() {
       priorityCounter++
 
       const { children, ...flatServer } = server
-      newFlatList.push(flatServer)
+      newFlatList.push(flatServer as Server)
 
-      traverse(children, server.ip)
+      if (children) {
+        traverse(children, server.ip)
+      }
     })
   }
 
@@ -897,9 +967,9 @@ function flattenTreeAndSync() {
 /**
  * @description (v15) 拖拽规则。
  */
-function checkMove(moveEvent) {
-  const draggedEl = moveEvent.draggedContext.element
-  const toEl = moveEvent.to
+function checkMove(moveEvent: any): boolean {
+  const draggedEl = moveEvent.draggedContext.element as Server
+  const toEl = moveEvent.to as HTMLElement
 
   // 检查被拖拽的元素是否是一个 "父服" (有子节点)
   if (
@@ -918,30 +988,32 @@ function checkMove(moveEvent) {
 
 // --- (E) 弹窗内的表单逻辑 (颜色与预设) ---
 
-function updateColorFromPicker(server) {
+function updateColorFromPicker(server: Server) {
   server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
 }
 
-function applyPreset(server) {
+function applyPreset(server: Server) {
   const presetKey = server.selectedPreset
   if (!presetKey || !presets[presetKey]) return
 
   const preset = presets[presetKey]
-  server.tag = preset.tag
-  server.tag_color_with_hash = preset.tag_color_with_hash
-  updateColorFromPicker(server)
+  if (preset) {
+    server.tag = preset.tag
+    server.tag_color_with_hash = preset.tag_color_with_hash
+    updateColorFromPicker(server)
+  }
 }
 
-function checkIfCustom(server) {
+function checkIfCustom(server: Server) {
   if (!server.selectedPreset || !presets[server.selectedPreset]) return
   const preset = presets[server.selectedPreset]
 
-  if (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash) {
+  if (preset && (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash)) {
     server.selectedPreset = ""
   }
 }
 
-function onColorInput(server) {
+function onColorInput(server: Server) {
   updateColorFromPicker(server)
   checkIfCustom(server)
 }
@@ -956,12 +1028,12 @@ const addServer = () => openServerModal(null, null)
 /**
  * @description “+ 子服”按钮 (v16)
  */
-const addChildServer = (parent) => openServerModal(null, parent)
+const addChildServer = (parent: Server) => openServerModal(null, parent)
 
 /**
  * @description 删除一个服务器（及其所有子服务器）。
  */
-async function removeServer(server) {
+async function removeServer(server: Server) {
   const serverToRemove = server
 
   let confirmed = false
@@ -1009,9 +1081,9 @@ async function removeAllServers() {
 
 function copyToClipboard() {
   navigator.clipboard.writeText(outputJson.value).then(() => {
-    showAlert('已复制到剪贴板！', '复制成功')
+    showToast('已复制到剪贴板！')
   }, () => {
-    showAlert('复制失败！', '复制失败')
+    showAlert('复制失败！请检查浏览器权限。', '复制失败')
   })
 }
 
@@ -1057,7 +1129,7 @@ onMounted(async () => {
       // (v16 建议 5) 保持为空，但提示用户
       // showAlert('已从剪贴板自动导入配置。', '导入成功');
     }
-  } catch (e) {
+  } catch (e: any) {
     // 失败 (权限被拒、剪贴板不是 JSON、JSON 格式不对等)
     // 在控制台打印错误，但不要打扰用户
     console.warn('Failed to auto-import from clipboard:', e.message);
@@ -1143,7 +1215,7 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <draggable v-model="serverTree" :item-key="server => server.ip" handle=".drag-handle"
+          <draggable v-model="serverTree" :item-key="(server: Server) => server.ip" handle=".drag-handle"
             :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
             class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
@@ -1188,7 +1260,7 @@ onBeforeUnmount(() => {
                   </div>
                 </div>
 
-                <draggable v-model="server.children" :item-key="child => child.ip" handle=".drag-handle"
+                <draggable v-model="server.children" :item-key="(child: Server) => child.ip" handle=".drag-handle"
                   :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync"
                   class="server-list child-list" :name="'server-list-anim-child'">
                   <template #item="{ element: childServer }">
@@ -1323,8 +1395,9 @@ onBeforeUnmount(() => {
 
                 <div class="form-group" style="flex-grow: 1;"> <label>标签 / 颜色</label>
                   <div class="form-compound-input">
-                    <input type="text" v-model="currentServerData.tag" @input="checkIfCustom(currentServerData)"
-                      placeholder="留空则不显示" class="form-compound-input-text" />
+                    <input type="text" v-model="currentServerData.tag"
+                      @input="checkIfCustom(currentServerData as Server)" placeholder="留空则不显示"
+                      class="form-compound-input-text" />
 
                     <div class="color-picker-wrapper">
                       <button type="button" class="custom-color-trigger" ref="colorPickerTriggerRef"
@@ -1338,7 +1411,7 @@ onBeforeUnmount(() => {
                           <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog" aria-modal="true">
                             <ColorPicker is-widget format="hex" :disable-alpha="true"
                               v-model:pureColor="currentServerData.tag_color_with_hash"
-                              @pureColorChange="onColorInput(currentServerData)" />
+                              @pureColorChange="onColorInput(currentServerData as Server)" />
                             <button type="button" class="btn btn-modal-confirm btn-color-picker-done"
                               @click="closeColorPicker">
                               完成
@@ -1355,9 +1428,9 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="presetSelectTriggerRef"
-                      @click="togglePresetSelect" @keydown="handlePresetSelectKeydown" 
-                      aria-haspopup="listbox" :aria-expanded="isPresetSelectOpen"
-                      :aria-activedescendant="isPresetSelectOpen && activePresetIndex > -1 ? `preset-option-${activePresetIndex}` : null">
+                      @click="togglePresetSelect" @keydown="handlePresetSelectKeydown" aria-haspopup="listbox"
+                      :aria-expanded="isPresetSelectOpen"
+                      :aria-activedescendant="(isPresetSelectOpen && activePresetIndex > -1 ? `preset-option-${activePresetIndex}` : undefined)">
 
                       <span v-if="selectedPresetObject" class="selected-option-content">
                         <span class="simple-tag-small" :style="{
@@ -1375,16 +1448,17 @@ onBeforeUnmount(() => {
                       <ul v-if="isPresetSelectOpen" class="custom-select-options" ref="presetSelectOptionsRef"
                         role="listbox">
 
-                        <li :id="`preset-option-0`" class="custom-select-option" 
+                        <li :id="`preset-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
                           @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
                           <span class="option-placeholder">-- 自定义 --</span>
                         </li>
 
-                        <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`" class="custom-select-option" :class="{
-                          'is-selected': currentServerData.selectedPreset === key,
-                          'is-active': activePresetIndex === index + 1
-                        }" @click="selectPreset(key)" role="option"
+                        <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`"
+                          class="custom-select-option" :class="{
+                            'is-selected': currentServerData.selectedPreset === key,
+                            'is-active': activePresetIndex === index + 1
+                          }" @click="selectPreset(key)" role="option"
                           :aria-selected="currentServerData.selectedPreset === key">
 
                           <span class="simple-tag-small" :style="{
@@ -1411,11 +1485,10 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="parentSelectTriggerRef"
-                      @click="toggleParentSelect" @keydown="handleParentSelectKeydown"
-                      :disabled="(modalMode === MODAL_MODE.EDIT && currentServerData.children && currentServerData.children.length > 0) ||
+                      @click="toggleParentSelect" @keydown="handleParentSelectKeydown" :disabled="(modalMode === MODAL_MODE.EDIT && currentServerData.children && currentServerData.children.length > 0) ||
                         (potentialParentServers.length === 0)
                         " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen"
-                        :aria-activedescendant="isParentSelectOpen && activeParentIndex > -1 ? `parent-option-${activeParentIndex}` : null">
+                      :aria-activedescendant="(isParentSelectOpen && activeParentIndex > -1 ? `parent-option-${activeParentIndex}` : undefined)">
 
                       <span v-if="selectedParent" class="selected-option-content">
                         <span v-if="selectedParent.tag" class="simple-tag-small" :style="{
@@ -1437,15 +1510,14 @@ onBeforeUnmount(() => {
                       <ul v-if="isParentSelectOpen" class="custom-select-options is-parent-select"
                         ref="parentSelectOptionsRef" role="listbox">
 
-                        <li :id="`parent-option-0`" class="custom-select-option" 
+                        <li :id="`parent-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
                           @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
                           <span class="option-placeholder">-- 默认为根服务器 --</span>
                         </li>
 
-                        <li v-for="(parent, index) in potentialParentServers" :key="parent.ip" 
-                          :id="`parent-option-${index + 1}`" class="custom-select-option"
-                          :class="{
+                        <li v-for="(parent, index) in potentialParentServers" :key="parent.ip"
+                          :id="`parent-option-${index + 1}`" class="custom-select-option" :class="{
                             'is-selected': currentServerData.parent_ip === parent.ip,
                             'is-disabled': parent.ip === editingServerIp,
                             'is-active': activeParentIndex === index + 1
@@ -1478,8 +1550,7 @@ onBeforeUnmount(() => {
                   <div class="form-group-toggle" style="margin-top: 0;">
                     <label class="toggle-switch">
                       <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                        class="toggle-switch-input" />
+                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
                       <span class="toggle-switch-slider"></span>
                     </label>
                     <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
@@ -1507,6 +1578,13 @@ onBeforeUnmount(() => {
           </div>
 
         </div>
+      </div>
+    </transition>
+
+    <!-- (优化) Toast 小提示 -->
+    <transition name="toast-fade">
+      <div v-if="isToastVisible" class="toast-notification">
+        {{ toastMessage }}
       </div>
     </transition>
 
@@ -2783,14 +2861,39 @@ textarea {
 
 /* 内部小标签 (用于触发器和选项) */
 .simple-tag-small {
-  font-size: 0.8rem;
-  font-weight: 500;
-  padding: 2px 6px;
-  border-radius: 4px;
-  flex-shrink: 0;
-  /* 防止标签被压缩 */
-  /* 其他样式 (背景色/颜色) 由内联 :style 提供 */
+    font-size: 0.8rem;
+    font-weight: 500;
+    padding: 2px 6px;
+    border-radius: 4px;
+    flex-shrink: 0;
 }
+
+/* (优化) Toast 小提示样式 */
+.toast-notification {
+  position: fixed;
+  top: 80px; /* 调整位置，使其更显眼 */
+  left: 50%;
+  transform: translateX(-50%);
+  background-color: var(--color-success);
+  color: #fff;
+  padding: 10px 20px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  z-index: 2000;
+  font-weight: 500;
+}
+
+.toast-fade-enter-active,
+.toast-fade-leave-active {
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.toast-fade-enter-from,
+.toast-fade-leave-to {
+  opacity: 0;
+  transform: translate(-50%, -20px);
+}
+
 
 .custom-select-options.is-parent-select {
   top: auto;
