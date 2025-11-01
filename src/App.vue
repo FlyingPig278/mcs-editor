@@ -994,7 +994,7 @@ function downloadJson() {
 
 /**
  * @description “加载配置”按钮的点击事件处理器。
- * 支持从 URL 或 JSON 文本加载。
+ * 支持从 URL、JSON 文本、/mcs import 命令或裸压缩字符串加载。
  */
 async function loadConfig() {
   if (config.value.servers.length > 0) {
@@ -1007,24 +1007,28 @@ async function loadConfig() {
     }
   }
 
-  const input = jsonInput.value.trim();
+  let input = jsonInput.value.trim();
   if (!input) {
     showAlert('输入框不能为空。', '提示');
     return;
   }
 
-  let configToParse: string | AppConfig | null = null;
+  // 1. 标准化输入：处理 /mcs import 前缀
+  if (input.startsWith('/mcs import ')) {
+    input = input.substring('/mcs import '.length).trim();
+  }
 
-  // 检查输入是 URL 还是 JSON
+  let newConfig: AppConfig | null = null;
+
+  // 2. 尝试按优先级顺序解析输入
+  // 优先级 1: URL with ?data= param
   if (input.startsWith('http') && input.includes('?data=')) {
     try {
       const url = new URL(input);
       const dataFromUrl = url.searchParams.get('data');
       if (dataFromUrl) {
-        const decompressed = decompressConfig(dataFromUrl);
-        if (decompressed) {
-          configToParse = decompressed;
-        } else {
+        newConfig = decompressConfig(dataFromUrl);
+        if (!newConfig) {
           showAlert('无法解压来自链接的数据，链接可能不完整或已损坏。', '导入失败');
           return;
         }
@@ -1037,11 +1041,32 @@ async function loadConfig() {
       return;
     }
   } else {
-    configToParse = input;
+    // 优先级 2: 裸压缩字符串
+    newConfig = decompressConfig(input);
+
+    // 优先级 3: JSON 文本 (如果解压失败)
+    if (!newConfig) {
+      try {
+        // `parseAndSetConfig` 期望一个字符串或对象，这里我们直接给它字符串
+        const success = parseAndSetConfig(input);
+        if (success) {
+          showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
+          jsonInput.value = '';
+        }
+        // parseAndSetConfig 会处理自己的错误提示，所以这里直接返回
+        return;
+      } catch (e) {
+        // 如果 `parseAndSetConfig` 内部的 JSON.parse 失败，它会抛出异常并显示 alert。
+        // 如果我们到了这里，说明所有尝试都失败了。
+        showAlert('输入的内容无法被识别为有效链接、JSON或压缩数据。请检查输入是否正确。', '导入失败');
+        return;
+      }
+    }
   }
 
-  if (configToParse) {
-    const success = parseAndSetConfig(configToParse);
+  // 3. 如果通过 URL 或解压获得了配置对象，则加载它
+  if (newConfig) {
+    const success = parseAndSetConfig(newConfig);
     if (success) {
       showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
       jsonInput.value = '';
@@ -1411,8 +1436,7 @@ onBeforeUnmount(() => {
           <draggable v-if="serverTree && serverTree.length > 0" v-model="serverTree"
             :item-key="(server: Server) => server.ip" handle=".drag-handle"
             :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
-            :swap-threshold="0.2"
-            class="server-list" :name="'server-list-anim-root'">
+            :swap-threshold="0.2" class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
               <div :key="server.ip" class="server-item-container" :class="{
                 'is-parent-container': server.children.length > 0
@@ -1445,8 +1469,7 @@ onBeforeUnmount(() => {
                       title="添加子服务器">
                       <font-awesome-icon :icon="faPlus" />
                     </button>
-                    <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple"
-                      title="编辑服务器">
+                    <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple" title="编辑服务器">
                       <font-awesome-icon :icon="faEdit" />
                     </button>
                     <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple btn-icon-simple"
@@ -1457,8 +1480,7 @@ onBeforeUnmount(() => {
                 </div>
 
                 <draggable v-model="server.children" :item-key="(child: Server) => child.ip" handle=".drag-handle"
-                  :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync"
-                  :swap-threshold="0.2"
+                  :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync" :swap-threshold="0.2"
                   class="server-list child-list" :name="'server-list-anim-child'">
                   <template #item="{ element: childServer }">
                     <div :key="childServer.ip" class="server-item-simple is-child" :class="{
@@ -1511,9 +1533,9 @@ onBeforeUnmount(() => {
       <div class="panel-body">
         <div class="form-section">
           <h3 class="io-header">1. 导入 (Import)</h3>
-          <p>粘贴分享链接或从机器人 /mcs export 导出的 JSON：</p>
+          <p>粘贴分享链接，或机器人导出的数据（如/mcs import命令、JSON等）：</p>
           <div class="form-group">
-            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或 JSON..."></textarea>
+            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或机器人导出的数据..."></textarea>
           </div>
           <button @click="loadConfig" class="btn btn-primary">
             <font-awesome-icon :icon="faUpload" /> 加载配置
@@ -1580,8 +1602,7 @@ onBeforeUnmount(() => {
               <div class="form-row">
                 <div class="form-group grow">
                   <label>服务器地址 (IP) <span class="required">*</span></label>
-                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com"
-                    data-autofocus />
+                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com" data-autofocus />
                 </div>
               </div>
 
@@ -1609,8 +1630,7 @@ onBeforeUnmount(() => {
                       <transition name="modal-fade">
                         <div v-if="isColorPickerOpen" class="color-picker-modal-overlay" @click.self="closeColorPicker"
                           role="presentation">
-                          <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog"
-                            aria-modal="true">
+                          <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog" aria-modal="true">
                             <ColorPicker is-widget format="hex" :disable-alpha="true"
                               v-model:pureColor="currentServerData.tag_color_with_hash"
                               @pureColorChange="onColorInput(currentServerData as Server)" />
@@ -1652,13 +1672,12 @@ onBeforeUnmount(() => {
 
                         <li :id="`preset-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
-                          @click="selectPreset('')" role="option"
-                          :aria-selected="!currentServerData.selectedPreset">
+                          @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
                           <span class="option-placeholder">-- 自定义 --</span>
                         </li>
 
-                        <li v-for="(preset, key, index) in presets" :key="key"
-                          :id="`preset-option-${index + 1}`" class="custom-select-option" :class="{
+                        <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`"
+                          class="custom-select-option" :class="{
                             'is-selected': currentServerData.selectedPreset === key,
                             'is-active': activePresetIndex === index + 1
                           }" @click="selectPreset(key)" role="option"
@@ -1716,8 +1735,7 @@ onBeforeUnmount(() => {
 
                         <li :id="`parent-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
-                          @click="selectParent('')" role="option"
-                          :aria-selected="!currentServerData.parent_ip">
+                          @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
                           <span class="option-placeholder">-- 默认为根服务器 --</span>
                         </li>
 
@@ -1726,8 +1744,8 @@ onBeforeUnmount(() => {
                             'is-selected': currentServerData.parent_ip === parent.ip,
                             'is-disabled': parent.ip === editingServerIp,
                             'is-active': activeParentIndex === index + 1
-                          }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)"
-                          role="option" :aria-selected="currentServerData.parent_ip === parent.ip"
+                          }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)" role="option"
+                          :aria-selected="currentServerData.parent_ip === parent.ip"
                           :aria-disabled="parent.ip === editingServerIp">
 
                           <span v-if="parent.tag" class="simple-tag-small" :style="{
@@ -1755,8 +1773,7 @@ onBeforeUnmount(() => {
                   <div class="form-group-toggle" style="margin-top: 0;">
                     <label class="toggle-switch">
                       <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)"
-                        class="toggle-switch-input" />
+                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
                       <span class="toggle-switch-slider"></span>
                     </label>
                     <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
@@ -2152,7 +2169,7 @@ textarea {
   box-shadow: 0 10px 16px rgba(79, 70, 229, 0.15);
 }
 
-.server-item-container:has(.child-list .sortable-ghost) > .server-item-simple {
+.server-item-container:has(.child-list .sortable-ghost)>.server-item-simple {
   border-color: var(--color-success);
   box-shadow: 0 0 0 3px var(--color-success);
 }
@@ -2292,7 +2309,7 @@ textarea {
 }
 
 .child-list {
-  margin-left: 20px;
+  margin-left: 40px;
 }
 
 .server-item-container.is-parent-container .child-list {
