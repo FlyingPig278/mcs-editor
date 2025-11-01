@@ -13,15 +13,17 @@ import {
   faSave,
   faPlus,
   faTrash,
-  faUpload,    // <-- (v17.15) 新增
-  faClipboard, // <-- (v17.15) 新增
+  faUpload,
+  faClipboard,
   faSpinner
 } from '@fortawesome/free-solid-svg-icons'
 import { ColorPicker } from 'vue3-colorpicker'
 import 'vue3-colorpicker/style.css'
 import pako from 'pako'
 
-// (优化) 定义服务器数据在紧凑数组中的位置
+// --- 数据压缩与编码 ---
+
+// 定义服务器数据在紧凑数组表示中的索引常量，用于优化体积
 const S_IP = 0;
 const S_COMMENT = 1;
 const S_TAG = 2;
@@ -29,7 +31,11 @@ const S_TAG_COLOR = 3;
 const S_IGNORE = 4;
 const S_CHILDREN = 5;
 
-// (优化) 将清理过的 JSON 树转换为紧凑数组
+/**
+ * 将服务器对象数组转换为更紧凑的数组格式以进行压缩。
+ * @param {Server[]} servers - 服务器对象数组。
+ * @returns {any[]} 转换后的紧凑数组。
+ */
 function jsonToCompactArray(servers: Server[]): any[] {
   if (!servers) return [];
   return servers.map(server => {
@@ -48,7 +54,11 @@ function jsonToCompactArray(servers: Server[]): any[] {
   });
 }
 
-// (优化) 将紧凑数组转换回 JSON 树
+/**
+ * 将紧凑数组格式的数据转换回标准服务器对象数组。
+ * @param {any[]} compactData - 紧凑数组。
+ * @returns {Server[]} 转换后的服务器对象数组。
+ */
 function compactArrayToJson(compactData: any[]): Server[] {
   return compactData.map(item => {
     const children = Array.isArray(item[S_CHILDREN])
@@ -72,13 +82,20 @@ function compactArrayToJson(compactData: any[]): Server[] {
   });
 }
 
-
-// --- (优化) Zlib + Base64 编解码 --- 
-
+/**
+ * 将 Base64 字符串转换为 URL 安全的格式。
+ * @param base64 - 标准 Base64 字符串。
+ * @returns URL 安全的 Base64 字符串。
+ */
 function toUrlSafeBase64(base64: string): string {
   return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
 }
 
+/**
+ * 将 URL 安全的 Base64 字符串转换回标准格式。
+ * @param urlSafeBase64 - URL 安全的 Base64 字符串。
+ * @returns 标准 Base64 字符串。
+ */
 function fromUrlSafeBase64(urlSafeBase64: string): string {
   let base64 = urlSafeBase64.replace(/-/g, '+').replace(/_/g, '/');
   while (base64.length % 4) {
@@ -87,6 +104,11 @@ function fromUrlSafeBase64(urlSafeBase64: string): string {
   return base64;
 }
 
+/**
+ * 压缩并编码配置对象为 URL 安全的字符串。
+ * @param configObject - 完整的应用配置对象。
+ * @returns 压缩和编码后的字符串。
+ */
 function compressConfig(configObject: AppConfig): string {
   try {
     const compactServers = jsonToCompactArray(configObject.servers);
@@ -105,6 +127,11 @@ function compressConfig(configObject: AppConfig): string {
   }
 }
 
+/**
+ * 解码并解压字符串，还原为配置对象。
+ * @param encodedString - 经过编码和压缩的字符串。
+ * @returns 应用配置对象，如果失败则返回 null。
+ */
 function decompressConfig(encodedString: string): AppConfig | null {
   try {
     const base64 = fromUrlSafeBase64(encodedString);
@@ -137,8 +164,8 @@ interface Server {
   parent_ip: string;
   selectedPreset: string;
   ignore_in_list: boolean;
-  priority?: number; // 拖拽时生成
-  children: Server[]; // 用于 serverTree
+  priority?: number; // 用于拖拽排序，在拖拽结束后生成
+  children: Server[]; // 存储子服务器，用于构建UI树形结构
 }
 
 interface AppConfig {
@@ -151,19 +178,19 @@ interface AppConfig {
 // --- 2. 静态配置数据 ---
 
 /**
- * @description 预设服务器标签
+ * @description 预设服务器标签，用于在弹窗中快速选择。
  */
 const presets: Record<string, { tag: string; tag_color_with_hash: string }> = {
   "lobby": { tag: "大厅", tag_color_with_hash: "#3498DB" },
   "survival": { tag: "生存", tag_color_with_hash: "#2ECC71" },
   "creative": { tag: "创造", tag_color_with_hash: "#F1C40F" },
   "mod": { tag: "模组", tag_color_with_hash: "#E67E22" },
-  "pvp": { tag: "PVP", tag_color_with_hash: "#E74C3C" },        // <-- 新增：PVP (战斗红)
-  "recreation": { tag: "复原", tag_color_with_hash: "#9B59B6" } // <-- 新增：复原 (高校紫)
+  "pvp": { tag: "PVP", tag_color_with_hash: "#E74C3C" },
+  "recreation": { tag: "复原", tag_color_with_hash: "#9B59B6" }
 }
 
 /**
- * @description (v16 重构) serverTypes 和 labels 仅用于显示
+ * @description 服务器类型及其对应的显示文本。
  */
 const serverTypeLabels: Record<string, string> = {
   standalone: '独立服务器',
@@ -171,21 +198,21 @@ const serverTypeLabels: Record<string, string> = {
   child: '子服务器'
 }
 
-// (v16 建议 5) 移除 defaultJsonString
-
 // --- 3. 核心响应式状态 ---
 
 const config = ref<AppConfig>({
   footer: "",
   servers: [],
-  show_offline_by_default: false // (v17.34) 新增：全局配置
+  show_offline_by_default: false
 })
 
+// UI上显示的服务器树形结构，由 `config.servers` 扁平列表计算而来。
 const serverTree = ref<Server[]>([])
 
+// 导入文本框的内容。
 const jsonInput = ref(``)
 
-// (v17.15) 主题切换
+// --- 主题切换 ---
 const isDarkMode = ref(false);
 
 function applyTheme(dark: boolean) {
@@ -203,8 +230,6 @@ function toggleTheme() {
   applyTheme(!isDarkMode.value);
 }
 
-// (我们将在下面的 onMounted 中调用它)
-
 // --- 4. 模态弹窗状态 ---
 
 // --- (A) 通用 Alert/Confirm 弹窗 ---
@@ -214,21 +239,21 @@ const modalMessage = ref('')
 const modalType = ref('alert')
 const modalResolve = ref<((value: boolean | PromiseLike<boolean>) => void) | null>(null)
 
-// --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗状态 ---
-const isServerModalVisible = ref(false) // 控制新弹窗的显示与隐藏
-const modalMode = ref<'add' | 'edit'>('add') // 'add' 或 'edit'
-const currentServerData = ref<Partial<Server> | null>(null) // 存储正在添加/编辑的服务器数据 (副本)
-const editingServerIp = ref<string | null>(null) // 存储原始 IP，用于编辑时的唯一性检验
-const isSaving = ref(false)             // (优化) 保存按钮的加载状态
-const alertModalRef = ref<HTMLElement | null>(null)         // Alert/Confirm 弹窗容器
-const serverModalRef = ref<HTMLElement | null>(null)        // 服务器编辑弹窗容器
+// --- (B) “添加/编辑”服务器弹窗状态 ---
+const isServerModalVisible = ref(false)
+const modalMode = ref<'add' | 'edit'>('add')
+const currentServerData = ref<Partial<Server> | null>(null)
+const editingServerIp = ref<string | null>(null)
+const isSaving = ref(false) // 保存按钮的加载状态
+const isDraggingChild = ref(false) // 是否正在拖拽子服务器
 
-// (优化) 自定义下拉框 A11y 状态
+// --- (C) 弹窗及自定义下拉框的 DOM 引用和 A11y 状态 ---
+const alertModalRef = ref<HTMLElement | null>(null)
+const serverModalRef = ref<HTMLElement | null>(null)
 const isParentSelectOpen = ref(false)
 const activeParentIndex = ref(-1)
-
-const parentSelectTriggerRef = ref<HTMLElement | null>(null) // 触发器按钮
-const parentSelectOptionsRef = ref<HTMLElement | null>(null) // 选项列表
+const parentSelectTriggerRef = ref<HTMLElement | null>(null)
+const parentSelectOptionsRef = ref<HTMLElement | null>(null)
 const isPresetSelectOpen = ref(false)
 const presetSelectTriggerRef = ref<HTMLElement | null>(null)
 const presetSelectOptionsRef = ref<HTMLElement | null>(null)
@@ -236,17 +261,18 @@ const activePresetIndex = ref(-1)
 const isColorPickerOpen = ref(false)
 const colorPickerTriggerRef = ref<HTMLElement | null>(null)
 const colorPickerPanelRef = ref<HTMLElement | null>(null)
-let cancelModalTimeout: number | null = null;           // 统一的弹窗清理句柄
+let cancelModalTimeout: number | null = null; // 统一的弹窗清理句柄
 
-// (优化) Toast 小提示状态
+// --- (D) Toast 提示状态 ---
 const isToastVisible = ref(false);
 const toastMessage = ref('');
 let toastTimeout: number | null = null;
 
-// (优化) 使用常量替代魔法字符串，提高代码可维护性
+// 使用常量替代魔法字符串，提高代码可维护性
 const MODAL_MODE = Object.freeze({ ADD: 'add', EDIT: 'edit' });
 const SERVER_TYPE = Object.freeze({ STANDALONE: 'standalone', PARENT: 'parent', CHILD: 'child' });
 
+// 为弹窗内的元素定义 ID，用于 a11y 属性 (aria-labelledby, aria-describedby)
 const modalIds = {
   alertTitle: 'alert-modal-title',
   alertMessage: 'alert-modal-message',
@@ -254,8 +280,15 @@ const modalIds = {
   serverBody: 'server-modal-body'
 }
 
+// --- 5. A11y (无障碍) & 焦点管理 ---
+
 const focusableSelectors = 'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex^="-"])'
 
+/**
+ * 在指定的容器内聚焦第一个可交互的元素。
+ * 优先聚焦带有 `data-autofocus` 属性的元素。
+ * @param containerRef - 容器的 Vue ref 或 HTMLElement。
+ */
 function focusFirstWithin(containerRef: Ref<HTMLElement | null> | HTMLElement) {
   nextTick(() => {
     const container = containerRef instanceof HTMLElement ? containerRef : containerRef?.value;
@@ -267,6 +300,7 @@ function focusFirstWithin(containerRef: Ref<HTMLElement | null> | HTMLElement) {
   })
 }
 
+// 监听各个弹窗的显示状态，自动聚焦
 watch(isModalVisible, (visible) => {
   if (!visible) return
   focusFirstWithin(alertModalRef)
@@ -277,6 +311,11 @@ watch(isServerModalVisible, (visible) => {
   focusFirstWithin(serverModalRef)
 })
 
+/**
+ * 在弹窗内捕获 Tab 键，实现焦点循环。
+ * @param event - 键盘事件。
+ * @param containerRef - 弹窗容器的 Vue ref 或 HTMLElement。
+ */
 function trapFocus(event: KeyboardEvent, containerRef: Ref<HTMLElement | null> | HTMLElement) {
   const container = containerRef instanceof HTMLElement ? containerRef : containerRef?.value;
   if (!container) return
@@ -300,40 +339,41 @@ function trapFocus(event: KeyboardEvent, containerRef: Ref<HTMLElement | null> |
   }
 }
 
+/**
+ * 全局键盘事件处理器。
+ * - Escape 键：按层级关闭最上层的 UI 元素（如弹窗、下拉框）。
+ * - Tab 键：在弹窗内实现焦点循环。
+ */
 function handleGlobalKeydown(event: KeyboardEvent) {
   if (event.key === 'Escape') {
-    if (isModalVisible.value) { // ✅ 优先检查 z-index 最高的弹窗
+    if (isModalVisible.value) {
       event.preventDefault()
       onModalCancel()
     }
-    // --- (v17.7 新增) 其次检查颜色选择器 ---
     else if (isColorPickerOpen.value) {
       event.preventDefault()
       isColorPickerOpen.value = false;
       (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
     }
-    // --- 结束 ---
-    else if (isPresetSelectOpen.value) { // (v17.2) 其次检查预设下拉框
+    else if (isPresetSelectOpen.value) {
       event.preventDefault()
       isPresetSelectOpen.value = false;
       (presetSelectTriggerRef.value as HTMLElement | null)?.focus()
     }
-    else if (isParentSelectOpen.value) { // (v17) 其次检查父服下拉框
+    else if (isParentSelectOpen.value) {
       event.preventDefault()
       isParentSelectOpen.value = false;
-      (parentSelectTriggerRef.value as HTMLElement | null)?.focus() // 焦点返回触发器
+      (parentSelectTriggerRef.value as HTMLElement | null)?.focus()
     }
     else if (isServerModalVisible.value) {
       event.preventDefault()
       closeServerModal()
     }
   } else if (event.key === 'Tab') {
-    // --- (v17.7 新增) ---
     if (isColorPickerOpen.value) {
       isColorPickerOpen.value = false
       trapFocus(event, serverModalRef)
     }
-    // --- 结束 ---
     else if (isPresetSelectOpen.value) {
       isPresetSelectOpen.value = false
       trapFocus(event, serverModalRef)
@@ -349,12 +389,11 @@ function handleGlobalKeydown(event: KeyboardEvent) {
     }
   }
 }
-// 统一的弹窗清理句柄
 
-// --- 5. 计算属性 (Computed Properties) ---
+// --- 6. 计算属性 (Computed Properties) ---
 
 /**
- * @description 计算出所有可以作为“父服务器”的服务器。
+ * @description 计算出所有可以作为“父服务器”的服务器 (即 `standalone` 或 `parent` 类型)。
  */
 const potentialParentServers = computed<Server[]>(() => {
   if (!config.value.servers) return []
@@ -362,11 +401,10 @@ const potentialParentServers = computed<Server[]>(() => {
 })
 
 /**
- * @description 计算出最终用于“导出”的 JSON 字符串。
- * (v_Fix) 修改为导出 'serverTree' (嵌套结构) 以方便后端渲染。
+ * @description 计算出最终用于“导出”的、经过清理的配置对象。
+ * 该对象使用嵌套的 `servers` 树结构，以保留父子关系。
  */
 const outputJson = computed<AppConfig>(() => {
-  // 1. 创建一个干净的、只包含导出所需数据的服务器树
   function cleanNode(node: Server): Server {
     const newNode: Server = {
       ip: node.ip,
@@ -375,8 +413,7 @@ const outputJson = computed<AppConfig>(() => {
       tag_color: node.tag_color,
       tag_color_with_hash: node.tag_color_with_hash,
       ignore_in_list: node.ignore_in_list,
-      children: [], // Default to empty array
-      // Fill in other required Server properties with defaults
+      children: [],
       server_type: node.server_type || 'standalone',
       parent_ip: node.parent_ip || '',
       selectedPreset: node.selectedPreset || ''
@@ -389,7 +426,6 @@ const outputJson = computed<AppConfig>(() => {
 
   const cleanServers = serverTree.value.map(cleanNode);
 
-  // 2. 构建最终的配置对象
   return {
     footer: config.value.footer,
     show_offline_by_default: config.value.show_offline_by_default,
@@ -398,160 +434,21 @@ const outputJson = computed<AppConfig>(() => {
 });
 
 /**
- * @description (v15) 拖拽规则。
- */
-function checkMove(moveEvent: any): boolean {
-  const draggedEl = moveEvent.draggedContext.element as Server
-  const toEl = moveEvent.to as HTMLElement
-
-  // 检查被拖拽的元素是否是一个 "父服" (有子节点)
-  if (
-    draggedEl &&
-    draggedEl.children &&
-    draggedEl.children.length > 0
-  ) {
-    // 检查目标列表是否是一个 "子列表"
-    if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
-      // 阻止移动 (父服不能成为子服)
-      return false
-    }
-  }
-  return true
-}
-
-// --- (E) 弹窗内的表单逻辑 (颜色与预设) ---
-
-function updateColorFromPicker(server: Server) {
-  server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
-}
-
-function applyPreset(server: Server) {
-  const presetKey = server.selectedPreset
-  if (!presetKey || !presets[presetKey]) return
-
-  const preset = presets[presetKey]
-  if (preset) {
-    server.tag = preset.tag
-    server.tag_color_with_hash = preset.tag_color_with_hash
-    updateColorFromPicker(server)
-  }
-}
-
-function checkIfCustom(server: Server) {
-  if (!server.selectedPreset || !presets[server.selectedPreset]) return
-  const preset = presets[server.selectedPreset]
-
-  if (preset && (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash)) {
-    server.selectedPreset = ""
-  }
-}
-
-function onColorInput(server: Server) {
-  updateColorFromPicker(server)
-  checkIfCustom(server)
-}
-
-// --- (F) 服务器增删 (根级别) ---
-
-/**
- * @description “+ 添加服务器”按钮 (v16)
- */
-const addServer = () => openServerModal(null, null)
-
-/**
- * @description “+ 子服”按钮 (v16)
- */
-const addChildServer = (parent: Server) => openServerModal(null, parent)
-
-/**
- * @description 删除一个服务器（及其所有子服务器）。
- */
-async function removeServer(server: Server) {
-  const serverToRemove = server
-
-  let confirmed = false
-  if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
-    const childCount = config.value.servers.filter(s => s.parent_ip === serverToRemove.ip).length
-    const message = `确定要删除服务器 ${serverToRemove.ip} 吗？${childCount > 0 ? `\n(其 ${childCount} 个子服务器将一并删除)` : ''}`
-    confirmed = await showConfirm(message, '删除确认');
-  } else {
-    confirmed = await showConfirm(`确定要删除服务器 ${serverToRemove.ip} 吗？`, '删除确认');
-  }
-
-  if (confirmed) {
-    if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
-      // 删除父服及其所有子服
-      const parentIp = serverToRemove.ip
-      config.value.servers = config.value.servers.filter(s => {
-        return s.ip !== serverToRemove.ip && s.parent_ip !== parentIp
-      })
-    } else {
-      // 只删除一个子服
-      const index = config.value.servers.findIndex(s => s.ip === serverToRemove.ip);
-      if (index > -1) {
-        config.value.servers.splice(index, 1)
-      }
-    }
-  }
-}
-
-/**
- * @description (v16 建议 4) 全局删除所有服务器
- */
-async function removeAllServers() {
-  const confirmed = await showConfirm(
-    `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
-    '删除全部确认'
-  );
-  if (confirmed) {
-    config.value.servers = [];
-    // (可选) 也可以重置页脚
-    // config.value.footer = "";
-  }
-}
-
-// --- (G) 导入/导出 (IO) 操作 ---
-
-/**
- * @description (优化) 计算出用于 URL 分享的压缩字符串
+ * @description 计算出用于 URL 分享的、经过压缩和编码的字符串。
  */
 const compressedOutput = computed<string>(() => {
   return compressConfig(outputJson.value);
 });
 
 /**
- * @description 计算出用于QQ机器人的导入命令
+ * @description 计算出用于QQ机器人的导入命令。
  */
 const importCommand = computed<string>(() => {
   return `/mcs import ${compressedOutput.value}`;
 });
 
 /**
- * @description 复制QQ机器人导入命令
- */
-function copyImportCommand() {
-  navigator.clipboard.writeText(importCommand.value).then(() => {
-    showToast('导入命令已复制！请直接将其发送到QQ群中。');
-  }, () => {
-    showAlert('复制失败！请检查浏览器权限。', '复制失败');
-  });
-}
-
-function downloadJson() {
-  const jsonString = JSON.stringify(outputJson.value, null, 2);
-  const blob = new Blob([jsonString], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'mcs-config.json';
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/**
- * @description (v17) 计算当前选中的父服务器对象，用于自定义下拉框显示
+ * @description 计算当前在编辑弹窗中选中的“父服务器”对象，用于在下拉框中显示其名称。
  */
 const selectedParent = computed<Server | undefined>(() => {
   if (!currentServerData.value || !currentServerData.value.parent_ip) {
@@ -561,7 +458,7 @@ const selectedParent = computed<Server | undefined>(() => {
 })
 
 /**
- * @description (v17.2) 计算当前选中的预设对象，用于自定义下拉框显示
+ * @description 计算当前在编辑弹窗中选中的“预设”对象，用于在下拉框中显示其内容。
  */
 const selectedPresetObject = computed<{ tag: string; tag_color_with_hash: string; } | undefined>(() => {
   if (!currentServerData.value || !currentServerData.value.selectedPreset) {
@@ -570,7 +467,9 @@ const selectedPresetObject = computed<{ tag: string; tag_color_with_hash: string
   return presets[currentServerData.value.selectedPreset]
 })
 
-// --- 6. 方法 (Methods) ---
+const isAddMode = computed(() => modalMode.value === MODAL_MODE.ADD);
+
+// --- 7. 方法 (Methods) ---
 
 // --- (A) 通用 Alert/Confirm 弹窗方法 ---
 
@@ -607,91 +506,27 @@ function onModalCancel() {
   modalResolve.value = null
 }
 
-const isAddMode = computed(() => modalMode.value === MODAL_MODE.ADD);
-
-// (v17.34) defineExpose, 解决模板引用问题
-defineExpose({
-  // Data
-  config,
-  jsonInput,
-  outputJson,
-  compressedOutput,
-  importCommand,
-  isModalVisible,
-  modalMode,
-  currentServerData,
-  isPresetSelectOpen,
-  isParentSelectOpen,
-  potentialParentServers,
-  selectedParent,
-  selectedPresetObject,
-  isSaving,
-  isColorPickerOpen,
-
-  // Computed
-  isAddMode,
-
-  // Methods
-  applyTheme,
-  toggleTheme,
-  buildTree,
-  flattenTreeAndSync,
-  parseAndSetConfig,
-  addServer,
-  removeServer,
-  addChildServer,
-  openServerModal,
-  closeServerModal,
-  saveServer,
-  checkMove,
-  handleGlobalKeydown,
-  showConfirm,
-  showAlert,
-  showToast,
-  copyImportCommand,
-  downloadJson,
-  loadConfig,
-  onColorInput,
-  checkIfCustom,
-  sanitizeIpForId,
-  removeAllServers,
-  handleClickOutsideParentSelect,
-  handleClickOutsidePresetSelect,
-  toggleParentSelect,
-  togglePresetSelect,
-  selectParent,
-  selectPreset,
-  handleParentSelectKeydown,
-  handlePresetSelectKeydown,
-  onModalConfirm,
-  onModalCancel
-});
-
 /**
- * @description (优化) 显示一个短暂的 Toast 提示
- * @param message - 要显示的消息
+ * @description 显示一个短暂的 Toast 提示消息。
+ * @param {string} message - 要显示的消息。
  */
 function showToast(message: string) {
-  // 如果当前有提示正在显示，先清除旧的计时器
   if (toastTimeout) {
     clearTimeout(toastTimeout);
   }
-
   toastMessage.value = message;
   isToastVisible.value = true;
-
-  // 3秒后自动隐藏
   toastTimeout = window.setTimeout(() => {
     isToastVisible.value = false;
     toastTimeout = null;
   }, 3000);
 }
 
-// --- (B) (v16 重构) 统一的“添加/编辑”服务器弹窗方法 ---
+// --- (B) “添加/编辑”服务器弹窗方法 ---
 
 /**
  * @description 创建一个用于“添加”弹窗的空白服务器对象。
- * @param {object | null} parentServer - 如果是添加子服，传入父服对象
+ * @param {Server | null} parentServer - 如果是添加子服务器，需传入其父服务器对象。
  * @returns {object} 一个新的服务器数据对象。
  */
 function createBlankServer(parentServer: Server | null = null): Partial<Server> {
@@ -701,54 +536,47 @@ function createBlankServer(parentServer: Server | null = null): Partial<Server> 
     tag: "",
     tag_color: "FF9800",
     tag_color_with_hash: "#FF9800",
-    server_type: SERVER_TYPE.STANDALONE, // 默认为 standalone
-    parent_ip: parentServer ? parentServer.ip : "", // (v16) 预设 parent_ip
+    server_type: SERVER_TYPE.STANDALONE,
+    parent_ip: parentServer ? parentServer.ip : "",
     selectedPreset: "",
     ignore_in_list: false,
-    children: [] // 确保 children 存在
+    children: []
   }
 }
 
 /**
- * @description (v16) 打开服务器弹窗（添加或编辑模式）
- * @param {object | null} [serverToEdit=null] - 要编辑的服务器对象。如果为 null，则为添加模式。
- * @param {object | null} [parentServer=null] - (仅添加模式) 如果要添加子服，传入父服。
+ * @description 打开服务器编辑弹窗，可用于“添加”或“编辑”模式。
+ * @param {Server | null} [serverToEdit=null] - 要编辑的服务器对象。如果为 null，则为添加模式。
+ * @param {Server | null} [parentServer=null] - (仅添加模式) 如果要添加子服务器，需传入其父服务器对象。
  */
 async function openServerModal(serverToEdit: Server | null = null, parentServer: Server | null = null) {
-  // 1. (竞争条件修复) 清除任何待处理的关闭超时
+  // 为防止快速连续点击导致状态错乱，先清除可能存在的关闭弹窗的计时器
   if (cancelModalTimeout) {
     clearTimeout(cancelModalTimeout)
     cancelModalTimeout = null
   }
 
-  isSaving.value = false; // 重置保存状态
+  isSaving.value = false;
 
-  // 2. 先清空数据 (确保 v-if 触发)
+  // 先将数据设为 null，以确保 Vue 的 v-if 指令能够正确触发组件的重新渲染
   currentServerData.value = null
+  await nextTick()
 
   if (serverToEdit) {
-    // --- 编辑模式 ---
     modalMode.value = MODAL_MODE.EDIT
-    // 存储原始 IP 用于验证
     editingServerIp.value = serverToEdit.ip
-    // 填充数据为 *深拷贝*
-    await nextTick() // 等待 v-if=null 生效
-    currentServerData.value = JSON.parse(JSON.stringify(serverToEdit))
+    currentServerData.value = JSON.parse(JSON.stringify(serverToEdit)) // 使用深拷贝以避免直接修改原始数据
   } else {
-    // --- 添加模式 ---
     modalMode.value = MODAL_MODE.ADD
     editingServerIp.value = null
-    // 填充数据为空白对象
-    await nextTick() // 等待 v-if=null 生效
     currentServerData.value = createBlankServer(parentServer)
   }
 
-  // 3. 显示弹窗
   isServerModalVisible.value = true
 }
 
 /**
- * @description (v16) 关闭服务器弹窗
+ * @description 关闭服务器编辑弹窗，并延迟清理弹窗内的数据。
  */
 function closeServerModal() {
   isServerModalVisible.value = false
@@ -757,7 +585,7 @@ function closeServerModal() {
     clearTimeout(cancelModalTimeout)
   }
 
-  // 启动超时清理
+  // 延迟清理数据，以保证关闭动画的流畅性
   cancelModalTimeout = window.setTimeout(() => {
     currentServerData.value = null
     editingServerIp.value = null
@@ -766,35 +594,7 @@ function closeServerModal() {
 }
 
 /**
- * @description (优化) 检查设置父服务器时是否会造成循环依赖。
- * @param {string} serverIp - 当前服务器的 IP。
- * @param {string} newParentIp - 计划设置的父服务器 IP。
- * @returns {boolean} - 如果会造成循环则返回 true。
- */
-function checkForCircularDependency(serverIp: string, newParentIp: string): boolean {
-  if (!newParentIp || serverIp === newParentIp) {
-    return false; // 没有父级或父级是自己，不算循环 (由其他验证处理)
-  }
-
-  let currentIp: string | undefined = newParentIp;
-  const visited = new Set<string>([serverIp]); // 将当前节点加入访问集合
-
-  while (currentIp) {
-    if (visited.has(currentIp)) {
-      return true; // 发现循环
-    }
-    visited.add(currentIp);
-
-    const parentServer = config.value.servers.find(s => s.ip === currentIp);
-    currentIp = parentServer ? parentServer.parent_ip : undefined;
-  }
-
-  return false;
-}
-
-
-/**
- * @description (v16) 保存“添加”或“编辑”的服务器 (已重构)
+ * @description 保存“添加”或“编辑”的服务器。包含表单验证、数据更新和依赖处理。
  */
 async function saveServer() {
   if (!currentServerData.value || isSaving.value) return;
@@ -830,7 +630,7 @@ async function saveServer() {
       isSaving.value = false;
       return;
     }
-    // 验证2: (优化) 防止循环依赖
+    // 验证2: 防止循环依赖
     if (checkForCircularDependency(editingServerIp.value || newIp, server.parent_ip)) {
       showAlert(
         `无法将服务器 [${server.parent_ip}] 设置为父服务器，因为这会创建一个循环依赖关系。`,
@@ -879,20 +679,147 @@ async function saveServer() {
   }
 
   // --- 4. 收尾 ---
-  // 延迟以观察加载状态
-  await new Promise(resolve => setTimeout(resolve, 200));
   isSaving.value = false;
   closeServerModal();
   showToast(modalMode.value === MODAL_MODE.ADD ? '服务器已成功添加！' : '服务器已成功更新！');
 }
 
+// --- (C) 服务器增删改查及列表操作 ---
+
 /**
- * @description 切换父服务器下拉框的显示
+ * @description “添加服务器”按钮的快捷方式，打开服务器编辑弹窗。
+ */
+const addServer = () => openServerModal(null, null)
+
+/**
+ * @description “添加子服务器”按钮的快捷方式。
+ * @param {Server} parent - 该子服务器的父服务器对象。
+ */
+const addChildServer = (parent: Server) => openServerModal(null, parent)
+
+/**
+ * @description 删除一个服务器（及其所有子服务器）。
+ */
+async function removeServer(server: Server) {
+  const serverToRemove = server
+
+  let confirmed = false
+  if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
+    const childCount = config.value.servers.filter(s => s.parent_ip === serverToRemove.ip).length
+    const message = `确定要删除服务器 ${serverToRemove.ip} 吗？${childCount > 0 ? `\n(其 ${childCount} 个子服务器将一并删除)` : ''}`
+    confirmed = await showConfirm(message, '删除确认');
+  } else {
+    confirmed = await showConfirm(`确定要删除服务器 ${serverToRemove.ip} 吗？`, '删除确认');
+  }
+
+  if (confirmed) {
+    if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
+      // 删除父服及其所有子服
+      const parentIp = serverToRemove.ip
+      config.value.servers = config.value.servers.filter(s => {
+        return s.ip !== serverToRemove.ip && s.parent_ip !== parentIp
+      })
+    } else {
+      // 只删除一个子服
+      const index = config.value.servers.findIndex(s => s.ip === serverToRemove.ip);
+      if (index > -1) {
+        config.value.servers.splice(index, 1)
+      }
+    }
+  }
+}
+
+/**
+ * @description 删除所有服务器，操作前会弹出确认框。
+ */
+async function removeAllServers() {
+  const confirmed = await showConfirm(
+    `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
+    '删除全部确认'
+  );
+  if (confirmed) {
+    config.value.servers = [];
+  }
+}
+
+/**
+ * @description vuedraggable 的 :move 钩子，用于定义拖拽规则。
+ * 主要规则：禁止将一个父服务器（即包含子服务器的服务器）拖拽进另一个服务器的子列表中。
+ * @param {any} moveEvent - vuedraggable 提供的移动事件对象。
+ * @returns {boolean} - 如果允许移动则返回 true，否则返回 false。
+ */
+function checkMove(moveEvent: any): boolean {
+  const draggedEl = moveEvent.draggedContext.element as Server
+  const toEl = moveEvent.to as HTMLElement
+
+  // --- 1. 拖拽子服务器时，设置标志位 ---
+  if (moveEvent.dragged.parentElement.classList.contains('child-list')) {
+    isDraggingChild.value = true;
+  } else {
+    isDraggingChild.value = false;
+  }
+
+  // --- 2. 禁止将父服务器拖拽进子列表 ---
+  if (
+    draggedEl &&
+    draggedEl.children &&
+    draggedEl.children.length > 0
+  ) {
+    if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
+      return false
+    }
+  }
+
+  // --- 3. 处理子服务器“向左拖出”取消嵌套的逻辑 ---
+  if (isDraggingChild.value) {
+    const rootList = document.querySelector('.server-list-anim-root');
+    if (toEl === rootList) {
+      // 当子服务器被拖到根列表时，允许移动
+      return true;
+    }
+  }
+
+  return true
+}
+
+// --- (D) 弹窗内的表单交互逻辑 ---
+
+function updateColorFromPicker(server: Server) {
+  server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
+}
+
+function applyPreset(server: Server) {
+  const presetKey = server.selectedPreset
+  if (!presetKey || !presets[presetKey]) return
+
+  const preset = presets[presetKey]
+  if (preset) {
+    server.tag = preset.tag
+    server.tag_color_with_hash = preset.tag_color_with_hash
+    updateColorFromPicker(server)
+  }
+}
+
+function checkIfCustom(server: Server) {
+  if (!server.selectedPreset || !presets[server.selectedPreset]) return
+  const preset = presets[server.selectedPreset]
+
+  if (preset && (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash)) {
+    server.selectedPreset = ""
+  }
+}
+
+function onColorInput(server: Server) {
+  updateColorFromPicker(server)
+  checkIfCustom(server)
+}
+
+/**
+ * @description 切换父服务器下拉框的显示。
  */
 function toggleParentSelect() {
   isParentSelectOpen.value = !isParentSelectOpen.value
   if (isParentSelectOpen.value) {
-    // 每次打开时重置高亮选项
     const currentIndex = potentialParentServers.value.findIndex(p => p.ip === currentServerData.value?.parent_ip);
     activeParentIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 因为第一个是“无”
   } else {
@@ -901,12 +828,12 @@ function toggleParentSelect() {
 }
 
 /**
- * @description (优化) 处理父服务器下拉框的键盘导航
+ * @description 处理父服务器下拉框的键盘导航（上下箭头选择，Enter键确认）。
  */
 function handleParentSelectKeydown(event: KeyboardEvent) {
   if (!isParentSelectOpen.value) return;
 
-  const optionsCount = potentialParentServers.value.length + 1; // +1 for the "none" option
+  const optionsCount = potentialParentServers.value.length + 1;
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     activeParentIndex.value = (activeParentIndex.value + 1) % optionsCount;
@@ -919,12 +846,11 @@ function handleParentSelectKeydown(event: KeyboardEvent) {
       const selectedIp = activeParentIndex.value === 0
         ? ''
         : (potentialParentServers.value[activeParentIndex.value - 1]?.ip ?? '');
-      if (selectedIp !== editingServerIp.value) { // 确保不会将自己设为父级
+      if (selectedIp !== editingServerIp.value) {
         selectParent(selectedIp);
       }
     }
   }
-  // 确保高亮选项在可视区域内
   nextTick(() => {
     const highlightedElement = parentSelectOptionsRef.value?.querySelector('.is-active');
     highlightedElement?.scrollIntoView({ block: 'nearest' });
@@ -932,19 +858,18 @@ function handleParentSelectKeydown(event: KeyboardEvent) {
 }
 
 /**
- * @description 选择一个新的父服务器
+ * @description 在下拉框中选择一个新的父服务器。
  */
 function selectParent(parentIp: string) {
   if (currentServerData.value) {
     currentServerData.value.parent_ip = parentIp
   }
   isParentSelectOpen.value = false
-    // 将焦点返回给触发器按钮
     ; (parentSelectTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 /**
- * @description (v17) 处理点击外部以关闭自定义下拉框
+ * @description 处理点击外部区域以关闭父服务器下拉框的逻辑。
  */
 function handleClickOutsideParentSelect(event: MouseEvent) {
   if (
@@ -957,26 +882,26 @@ function handleClickOutsideParentSelect(event: MouseEvent) {
 }
 
 /**
- * @description 切换快捷预设下拉框的显示
+ * @description 切换快捷预设下拉框的显示。
  */
 function togglePresetSelect() {
   isPresetSelectOpen.value = !isPresetSelectOpen.value;
   if (isPresetSelectOpen.value) {
     const presetKeys = Object.keys(presets);
     const currentIndex = presetKeys.indexOf(currentServerData.value?.selectedPreset || '');
-    activePresetIndex.value = currentIndex > -1 ? currentIndex + 1 : 0; // +1 for "custom"
+    activePresetIndex.value = currentIndex > -1 ? currentIndex + 1 : 0;
   } else {
     activePresetIndex.value = -1;
   }
 }
 
 /**
- * @description (优化) 处理预设下拉框的键盘导航
+ * @description 处理预设下拉框的键盘导航（上下箭头选择，Enter键确认）。
  */
 function handlePresetSelectKeydown(event: KeyboardEvent) {
   if (!isPresetSelectOpen.value) return;
 
-  const optionsCount = Object.keys(presets).length + 1; // +1 for "custom"
+  const optionsCount = Object.keys(presets).length + 1;
   if (event.key === 'ArrowDown') {
     event.preventDefault();
     activePresetIndex.value = (activePresetIndex.value + 1) % optionsCount;
@@ -991,7 +916,6 @@ function handlePresetSelectKeydown(event: KeyboardEvent) {
       selectPreset(selectedKey as string);
     }
   }
-  // 确保高亮选项在可视区域内
   nextTick(() => {
     const highlightedElement = (presetSelectOptionsRef.value as HTMLElement | null)?.querySelector('.is-active');
     (highlightedElement as HTMLElement | null)?.scrollIntoView({ block: 'nearest' });
@@ -999,21 +923,20 @@ function handlePresetSelectKeydown(event: KeyboardEvent) {
 }
 
 /**
- * @description 选择一个新的预设
+ * @description 在下拉框中选择一个新的预设。
  */
 function selectPreset(presetKey: string) {
   if (currentServerData.value) {
     currentServerData.value.selectedPreset = presetKey
-    // 关键: 选择后要立即应用 (applyPreset 会处理空 key)
     applyPreset(currentServerData.value as Server);
   }
   isPresetSelectOpen.value = false
-  activePresetIndex.value = -1; // 重置
+  activePresetIndex.value = -1;
   ; (presetSelectTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 /**
- * @description (v17.2) 处理点击外部以关闭快捷预设下拉框
+ * @description 处理点击外部区域以关闭预设下拉框的逻辑。
  */
 function handleClickOutsidePresetSelect(event: MouseEvent) {
   if (
@@ -1025,146 +948,55 @@ function handleClickOutsidePresetSelect(event: MouseEvent) {
   }
 }
 
-// 监听下拉框状态，动态添加/移除全局点击监听
-watch(isParentSelectOpen, (isOpen) => {
-  if (isOpen) {
-    // 使用 mousedown 而非 click，以便在点击事件触发前关闭
-    document.addEventListener('mousedown', handleClickOutsideParentSelect)
-  } else {
-    document.removeEventListener('mousedown', handleClickOutsideParentSelect)
-  }
-})
-
 /**
- * @description (v17.7) 切换颜色选择器
+ * @description 切换颜色选择器的显示状态。
  */
 function toggleColorPicker() {
   isColorPickerOpen.value = !isColorPickerOpen.value
 }
 
 /**
- * @description (v17.10) 新增：用于关闭颜色模态框
+ * @description 关闭颜色选择器并使焦点返回到触发器按钮。
  */
 function closeColorPicker() {
   isColorPickerOpen.value = false
-    ; (colorPickerTriggerRef.value as HTMLElement | null)?.focus() // 焦点返回
+    ; (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
 }
 
+// --- (E) 导入/导出 (IO) 操作 ---
 
-// (v17.2) 监听预设下拉框状态
-watch(isPresetSelectOpen, (isOpen) => {
-  if (isOpen) {
-    document.addEventListener('mousedown', handleClickOutsidePresetSelect)
-  } else {
-    document.removeEventListener('mousedown', handleClickOutsidePresetSelect)
-  }
-})
-
-
-// --- (C) 辅助函数 (Helpers) ---
-
-function getContrastColor(hexColor: string): string {
-  if (!hexColor || hexColor.length < 7) return '#000000';
-  const r = parseInt(hexColor.substr(1, 2), 16);
-  const g = parseInt(hexColor.substr(3, 2), 16);
-  const b = parseInt(hexColor.substr(5, 2), 16);
-  const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
-  return (yiq >= 128) ? '#000000' : '#FFFFFF';
-}
-
-function sanitizeIpForId(ip: string | undefined): string {
-  if (!ip) return 'new-server';
-  return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
+/**
+ * @description 复制QQ机器人导入命令到剪贴板。
+ */
+function copyImportCommand() {
+  navigator.clipboard.writeText(importCommand.value).then(() => {
+    showToast('导入命令已复制！请直接将其发送到QQ群中。');
+  }, () => {
+    showAlert('复制失败！请检查浏览器权限。', '复制失败');
+  });
 }
 
 /**
- * @description (v14) 核心重构：将扁平的服务器列表转换为嵌套树形结构。
+ * @description 将当前配置下载为 JSON 文件。
  */
-function buildTree(flatList: Server[]): Server[] {
-  const map: Record<string, Server> = {}
-  const serversWithChildren: Server[] = flatList
-    .map(server => {
-      const serverCopy = { ...server, children: [] }
-      map[serverCopy.ip] = serverCopy
-      return serverCopy
-    })
-
-  const tree: Server[] = []
-
-  serversWithChildren.forEach(server => {
-    if (server.parent_ip) {
-      const parent = map[server.parent_ip]
-      if (parent) {
-        server.server_type = 'child'
-        parent.children.push(server)
-      } else {
-        // 孤儿节点
-        server.parent_ip = ''
-        server.server_type = 'standalone'
-        tree.push(server)
-      }
-    } else {
-      // 根节点
-      tree.push(server)
-    }
-  })
-
-  return tree
-}
-
-
-// --- (D) 核心逻辑 (Core Logic) ---
-
-
-/**
- * @description (v14) 拖拽结束后，重建 `config.value.servers`。
- */
-function flattenTreeAndSync() {
-  const newFlatList: Server[] = []
-  let priorityCounter = 0
-
-  function traverse(nodes: Server[], parentIp = "") {
-    if (!nodes) return
-
-    nodes.forEach((server) => {
-      server.parent_ip = parentIp
-
-      if (parentIp) {
-        server.server_type = 'child'
-      }
-      else if (server.children && server.children.length > 0) {
-        server.server_type = 'parent'
-      } else {
-        server.server_type = 'standalone'
-      }
-
-      server.priority = (priorityCounter + 1) * 10
-      priorityCounter++
-
-      const { children, ...flatServer } = server
-      newFlatList.push(flatServer as Server)
-
-      if (children) {
-        traverse(children, server.ip)
-      }
-    })
-  }
-
-  traverse(serverTree.value, "")
-
-  // 临时禁用 watch，更新，然后再启用
-  stopWatch()
-  config.value.servers = newFlatList
-  nextTick(() => {
-    startWatch()
-  })
+function downloadJson() {
+  const jsonString = JSON.stringify(outputJson.value, null, 2);
+  const blob = new Blob([jsonString], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mcs-config.json';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
 }
 
 /**
  * @description “加载配置”按钮的点击事件处理器。
+ * 支持从 URL 或 JSON 文本加载。
  */
 async function loadConfig() {
-  // 1. 确认覆盖
   if (config.value.servers.length > 0) {
     const confirmed = await showConfirm(
       '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
@@ -1183,7 +1015,7 @@ async function loadConfig() {
 
   let configToParse: string | AppConfig | null = null;
 
-  // 2. 检查输入类型 (URL vs JSON)
+  // 检查输入是 URL 还是 JSON
   if (input.startsWith('http') && input.includes('?data=')) {
     try {
       const url = new URL(input);
@@ -1197,7 +1029,6 @@ async function loadConfig() {
           return;
         }
       } else {
-        // 是一个 URL 但没有 data 参数，这很奇怪，当作错误处理
         showAlert('链接中未找到有效的“data”参数。', '导入失败');
         return;
       }
@@ -1206,28 +1037,24 @@ async function loadConfig() {
       return;
     }
   } else {
-    // 3. 假定为 JSON 字符串
     configToParse = input;
   }
 
-  // 4. 解析和设置配置
   if (configToParse) {
     const success = parseAndSetConfig(configToParse);
     if (success) {
       showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
-      jsonInput.value = ''; // 成功后清空
+      jsonInput.value = '';
     }
-    // `parseAndSetConfig` 内部会在失败时显示 alert
   }
 }
 
 /**
- * @description 解析 JSON 字符串并设置到 `config` 状态中。(已重构)
+ * @description 解析 JSON 字符串或已解压的对象，并将其加载到应用的状态中。
+ * @param {string | AppConfig} input - JSON 字符串或配置对象。
  * @returns {boolean} - 解析和加载是否成功。
  */
-
 function parseAndSetConfig(input: string | AppConfig): boolean {
-  // (优化) 将内部逻辑拆分为独立的、可测试的函数
   function flattenImportedServers(servers: any[], parentIp = ""): any[] {
     if (!Array.isArray(servers)) return [];
     const flatList: any[] = [];
@@ -1273,7 +1100,6 @@ function parseAndSetConfig(input: string | AppConfig): boolean {
       throw new Error(`导入失败：JSON 数据中包含重复的 IP 地址。\n重复项: ${[...new Set(duplicates)].join(', ')}`);
     }
 
-    // 按 priority 排序
     return validatedServers.sort((a, b) => (a.priority || 0) - (b.priority || 0));
   }
 
@@ -1304,10 +1130,141 @@ function parseAndSetConfig(input: string | AppConfig): boolean {
   }
 }
 
+// --- (F) 辅助函数 (Helpers) ---
 
+/**
+ * @description 检查设置父服务器时是否会造成循环依赖。
+ * @param {string} serverIp - 当前服务器的 IP。
+ * @param {string} newParentIp - 计划设置的父服务器 IP。
+ * @returns {boolean} - 如果会造成循环则返回 true。
+ */
+function checkForCircularDependency(serverIp: string, newParentIp: string): boolean {
+  if (!newParentIp || serverIp === newParentIp) {
+    return false;
+  }
 
-// --- (H) v14 核心重构：双向同步 Watch ---
-//
+  let currentIp: string | undefined = newParentIp;
+  const visited = new Set<string>([serverIp]);
+
+  while (currentIp) {
+    if (visited.has(currentIp)) {
+      return true; // 发现循环
+    }
+    visited.add(currentIp);
+
+    const parentServer = config.value.servers.find(s => s.ip === currentIp);
+    currentIp = parentServer ? parentServer.parent_ip : undefined;
+  }
+
+  return false;
+}
+
+/**
+ * @description 根据给定的十六进制颜色代码，计算出对比度最高的文本颜色（黑色或白色）。
+ */
+function getContrastColor(hexColor: string): string {
+  if (!hexColor || hexColor.length < 7) return '#000000';
+  const r = parseInt(hexColor.substr(1, 2), 16);
+  const g = parseInt(hexColor.substr(3, 2), 16);
+  const b = parseInt(hexColor.substr(5, 2), 16);
+  const yiq = ((r * 299) + (g * 587) + (b * 114)) / 1000;
+  return (yiq >= 128) ? '#000000' : '#FFFFFF';
+}
+
+/**
+ * @description 清理 IP 地址字符串，使其可用作 HTML 元素的 ID。
+ */
+function sanitizeIpForId(ip: string | undefined): string {
+  if (!ip) return 'new-server';
+  return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
+}
+
+// --- 8. 核心数据同步 ---
+
+/**
+ * @description 将扁平的服务器列表（`config.servers`）转换为嵌套的树形结构，用于 UI 渲染。
+ * @param {Server[]} flatList - 扁平的服务器数组。
+ * @returns {Server[]} - 嵌套的树形结构数组。
+ */
+function buildTree(flatList: Server[]): Server[] {
+  const map: Record<string, Server> = {}
+  const serversWithChildren: Server[] = flatList
+    .map(server => {
+      const serverCopy = { ...server, children: [] }
+      map[serverCopy.ip] = serverCopy
+      return serverCopy
+    })
+
+  const tree: Server[] = []
+
+  serversWithChildren.forEach(server => {
+    if (server.parent_ip) {
+      const parent = map[server.parent_ip]
+      if (parent) {
+        server.server_type = 'child'
+        parent.children.push(server)
+      } else {
+        // 孤儿节点：父节点不存在，将其视为根节点
+        server.parent_ip = ''
+        server.server_type = 'standalone'
+        tree.push(server)
+      }
+    } else {
+      // 根节点
+      tree.push(server)
+    }
+  })
+
+  return tree
+}
+
+/**
+ * @description 拖拽操作结束后，将 UI 的树形结构 (`serverTree`) 扁平化，并同步回核心数据 `config.value.servers`。
+ * 同时，重新计算所有服务器的 `server_type` 和 `priority`。
+ */
+function flattenTreeAndSync() {
+  isDraggingChild.value = false; // 重置标志位
+  const newFlatList: Server[] = []
+  let priorityCounter = 0
+
+  function traverse(nodes: Server[], parentIp = "") {
+    if (!nodes) return
+
+    nodes.forEach((server) => {
+      server.parent_ip = parentIp
+
+      if (parentIp) {
+        server.server_type = 'child'
+      }
+      else if (server.children && server.children.length > 0) {
+        server.server_type = 'parent'
+      } else {
+        server.server_type = 'standalone'
+      }
+
+      server.priority = (priorityCounter + 1) * 10
+      priorityCounter++
+
+      const { children, ...flatServer } = server
+      newFlatList.push(flatServer as Server)
+
+      if (children) {
+        traverse(children, server.ip)
+      }
+    })
+  }
+
+  traverse(serverTree.value, "")
+
+  // 为避免触发不必要的 watch 更新循环，先临时停止监听，更新数据后再重新启动。
+  stopWatch()
+  config.value.servers = newFlatList
+  nextTick(() => {
+    startWatch()
+  })
+}
+
+// 监听 `config.servers` 的变化，并自动更新 `serverTree`
 const stopWatch = watch(
   () => config.value.servers,
   (newFlatList) => {
@@ -1329,11 +1286,11 @@ const startWatch = () => {
     { deep: true, immediate: true }
   )
 }
-// --- 7. 初始化 ---
 
-// (v16 建议 5) 组件加载时，尝试从剪贴板自动导入
+// --- 9. 初始化与生命周期 ---
+
 onMounted(async () => {
-  // (优化) 优先从 URL 参数导入
+  // 优先检查 URL search params 中是否有名为 'data' 的参数
   const urlParams = new URLSearchParams(window.location.search);
   const dataFromUrl = urlParams.get('data');
 
@@ -1354,10 +1311,10 @@ onMounted(async () => {
     return; // 处理完 URL 后即返回，不再处理剪贴板
   }
 
-  // 如果 URL 中没有数据，再尝试从剪贴板导入
+  // 如果 URL 中没有数据，再尝试从剪贴板自动导入
   try {
     const text = await navigator.clipboard.readText();
-    if (!text) return; // 剪贴板为空
+    if (!text) return;
 
     const data = JSON.parse(text);
 
@@ -1367,13 +1324,15 @@ onMounted(async () => {
       showToast('已从剪贴板自动导入配置。');
     }
   } catch (e: any) {
-    console.warn('Failed to auto-import from clipboard:', e.message);
+    console.warn('从剪贴板自动导入失败:', e.message);
   }
 
+  // 初始化时加载一个空配置
   if (config.value.servers.length === 0 && !config.value.footer) {
     parseAndSetConfig(`{}`);
   }
 
+  // 初始化主题
   const savedTheme = localStorage.getItem('theme')
   if (savedTheme) {
     applyTheme(savedTheme === 'dark')
@@ -1381,16 +1340,17 @@ onMounted(async () => {
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
     applyTheme(prefersDark)
   }
+
+  // 添加全局事件监听
   document.addEventListener('keydown', handleGlobalKeydown);
 });
 
 onBeforeUnmount(() => {
+  // 移除全局事件监听，防止内存泄漏
   document.removeEventListener('keydown', handleGlobalKeydown);
   document.removeEventListener('mousedown', handleClickOutsideParentSelect);
   document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
 });
-
-// (v16 建议 5) 移除末尾的 parseAndSetConfig(defaultJsonString)
 
 </script>
 
@@ -1448,8 +1408,10 @@ onBeforeUnmount(() => {
             </div>
           </div>
 
-          <draggable v-if="serverTree && serverTree.length > 0" v-model="serverTree" :item-key="(server: Server) => server.ip" handle=".drag-handle"
+          <draggable v-if="serverTree && serverTree.length > 0" v-model="serverTree"
+            :item-key="(server: Server) => server.ip" handle=".drag-handle"
             :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
+            :swap-threshold="0.2"
             class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
               <div :key="server.ip" class="server-item-container" :class="{
@@ -1483,7 +1445,8 @@ onBeforeUnmount(() => {
                       title="添加子服务器">
                       <font-awesome-icon :icon="faPlus" />
                     </button>
-                    <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple" title="编辑服务器">
+                    <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple"
+                      title="编辑服务器">
                       <font-awesome-icon :icon="faEdit" />
                     </button>
                     <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple btn-icon-simple"
@@ -1495,6 +1458,7 @@ onBeforeUnmount(() => {
 
                 <draggable v-model="server.children" :item-key="(child: Server) => child.ip" handle=".drag-handle"
                   :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync"
+                  :swap-threshold="0.2"
                   class="server-list child-list" :name="'server-list-anim-child'">
                   <template #item="{ element: childServer }">
                     <div :key="childServer.ip" class="server-item-simple is-child" :class="{
@@ -1616,7 +1580,8 @@ onBeforeUnmount(() => {
               <div class="form-row">
                 <div class="form-group grow">
                   <label>服务器地址 (IP) <span class="required">*</span></label>
-                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com" data-autofocus />
+                  <input type="text" v-model="currentServerData.ip" placeholder="例如: play.example.com"
+                    data-autofocus />
                 </div>
               </div>
 
@@ -1644,7 +1609,8 @@ onBeforeUnmount(() => {
                       <transition name="modal-fade">
                         <div v-if="isColorPickerOpen" class="color-picker-modal-overlay" @click.self="closeColorPicker"
                           role="presentation">
-                          <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog" aria-modal="true">
+                          <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog"
+                            aria-modal="true">
                             <ColorPicker is-widget format="hex" :disable-alpha="true"
                               v-model:pureColor="currentServerData.tag_color_with_hash"
                               @pureColorChange="onColorInput(currentServerData as Server)" />
@@ -1686,12 +1652,13 @@ onBeforeUnmount(() => {
 
                         <li :id="`preset-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
-                          @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
+                          @click="selectPreset('')" role="option"
+                          :aria-selected="!currentServerData.selectedPreset">
                           <span class="option-placeholder">-- 自定义 --</span>
                         </li>
 
-                        <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`"
-                          class="custom-select-option" :class="{
+                        <li v-for="(preset, key, index) in presets" :key="key"
+                          :id="`preset-option-${index + 1}`" class="custom-select-option" :class="{
                             'is-selected': currentServerData.selectedPreset === key,
                             'is-active': activePresetIndex === index + 1
                           }" @click="selectPreset(key)" role="option"
@@ -1733,7 +1700,8 @@ onBeforeUnmount(() => {
                         }">{{ selectedParent.tag }}</span>
                         <span class="option-text">
                           <template v-if="selectedParent.comment">{{ selectedParent.comment }} ({{ selectedParent.ip
-                          }})</template>
+                          }})
+                          </template>
                           <template v-else>{{ selectedParent.ip }}</template>
                         </span>
                       </span>
@@ -1748,7 +1716,8 @@ onBeforeUnmount(() => {
 
                         <li :id="`parent-option-0`" class="custom-select-option"
                           :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
-                          @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
+                          @click="selectParent('')" role="option"
+                          :aria-selected="!currentServerData.parent_ip">
                           <span class="option-placeholder">-- 默认为根服务器 --</span>
                         </li>
 
@@ -1757,8 +1726,8 @@ onBeforeUnmount(() => {
                             'is-selected': currentServerData.parent_ip === parent.ip,
                             'is-disabled': parent.ip === editingServerIp,
                             'is-active': activeParentIndex === index + 1
-                          }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)" role="option"
-                          :aria-selected="currentServerData.parent_ip === parent.ip"
+                          }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)"
+                          role="option" :aria-selected="currentServerData.parent_ip === parent.ip"
                           :aria-disabled="parent.ip === editingServerIp">
 
                           <span v-if="parent.tag" class="simple-tag-small" :style="{
@@ -1786,7 +1755,8 @@ onBeforeUnmount(() => {
                   <div class="form-group-toggle" style="margin-top: 0;">
                     <label class="toggle-switch">
                       <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
+                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)"
+                        class="toggle-switch-input" />
                       <span class="toggle-switch-slider"></span>
                     </label>
                     <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
@@ -1817,7 +1787,7 @@ onBeforeUnmount(() => {
       </div>
     </transition>
 
-    <!-- (优化) Toast 小提示 -->
+    <!-- Toast 小提示 -->
     <transition name="toast-fade">
       <div v-if="isToastVisible" class="toast-notification">
         {{ toastMessage }}
@@ -1828,76 +1798,131 @@ onBeforeUnmount(() => {
 </template>
 
 <style>
-/* --- (新增) 夜间模式 --- */
+/* --- 1. 主题与颜色变量 --- */
 
-/* 1. 夜间模式的颜色变量 (覆盖 :root) */
+:root {
+  --color-body-gradient-start: #eef2ff;
+  --color-body-gradient-end: #f9fafb;
+  --color-panel-gradient-start: #6366f1;
+  --color-panel-gradient-end: #7c3aed;
+  --color-surface: #ffffff;
+  --color-surface-muted: #f5f7fb;
+  --color-text-primary: #1f2933;
+  --color-text-secondary: #4b5563;
+  --color-border: #dbe2ef;
+  --color-primary: #4f46e5;
+  --color-primary-hover: #4338ca;
+  --color-secondary: #2563eb;
+  --color-secondary-hover: #1d4ed8;
+  --color-success: #10b981;
+  --color-success-hover: #059669;
+  --color-danger: #ef4444;
+  --color-danger-hover: #dc2626;
+  --color-focus-outline: rgba(99, 102, 241, 0.45);
+  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
+  --shadow-hover: 0 16px 40px rgba(79, 70, 229, 0.16);
+}
+
+/* --- 夜间模式 --- */
 html.dark-mode {
   --color-body-gradient-start: #111827;
-  /* 深灰蓝 */
   --color-body-gradient-end: #1f2937;
-  /* 稍浅的灰蓝 */
-
   --color-panel-gradient-start: #4f46e5;
-  /* 调整渐变色 */
   --color-panel-gradient-end: #7c3aed;
-
   --color-surface: #1f2937;
-  /* 卡片背景 */
   --color-surface-muted: #374151;
-  /* 嵌套/次要背景 */
-
   --color-text-primary: #f3f4f6;
-  /* 亮灰色 (非纯白) */
   --color-text-secondary: #9ca3af;
-  /* 中灰色 */
-
   --color-border: #4b5563;
-  /* 深色边框 */
-
-  /* --- (v17.15) 提高对比度 --- */
   --color-primary: #818cf8;
-  /* (原: #6366f1) 变亮 */
   --color-primary-hover: #6366f1;
-  /* (原: #4f46e5) 使用旧的默认色 */
   --color-secondary: #60a5fa;
-  /* (原: #3b82f6) 变亮 */
   --color-secondary-hover: #3b82f6;
-  /* (原: #2563eb) 使用旧的默认色 */
-
   --color-focus-outline: rgba(129, 140, 248, 0.55);
-  /* (v17.15) 匹配新的主色 */
-  /* 提高不透明度 */
-
   --shadow-soft: 0 10px 20px rgba(0, 0, 0, 0.2);
   --shadow-hover: 0 16px 40px rgba(0, 0, 0, 0.25);
 }
 
-/* 2. 为 body 添加过渡动画 */
+/* 为颜色变化添加过渡动画 */
 body {
   transition: background 0.3s ease;
 }
 
-/* 3. 为所有使用变量的元素添加过渡动画 */
 .panel,
 .modal-box,
 .btn,
-input[type="text"],
+input,
 select,
 textarea,
-.color-picker,
 .server-item-simple,
-.btn-add-child-simple,
-.btn-edit-simple,
 .btn-modal-cancel,
 .btn-modal-confirm,
-.form-compound-input {
+.form-compound-input,
+.custom-select-trigger {
   transition: background 0.3s ease, color 0.3s ease, border-color 0.3s ease;
 }
 
-/* 4. 夜间模式切换按钮的样式 */
+/* --- 2. 全局与布局 --- */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+}
+
+body {
+  background: linear-gradient(135deg, var(--color-body-gradient-start), var(--color-body-gradient-end));
+  min-height: 100vh;
+  padding: 20px;
+  color: var(--color-text-primary);
+  line-height: 1.5;
+}
+
+.layout-container {
+  display: grid;
+  grid-template-columns: minmax(600px, 2fr) minmax(350px, 1fr);
+  align-items: flex-start;
+  gap: 20px;
+  max-width: 1280px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.panel {
+  background: var(--color-surface);
+  border-radius: 16px;
+  box-shadow: var(--shadow-soft);
+  overflow: hidden;
+  min-width: 0;
+  border: 1px solid var(--color-border);
+}
+
+.io-panel {
+  position: sticky;
+  top: 20px;
+  align-self: flex-start;
+}
+
 .panel-header {
   position: relative;
-  /* 为按钮定位 */
+  background: linear-gradient(135deg, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
+  color: #fff;
+  padding: 24px 20px;
+  text-align: center;
+}
+
+.panel-header h1 {
+  font-size: 28px;
+  margin-bottom: 10px;
+}
+
+.panel-header .subtitle {
+  font-size: 16px;
+  opacity: 0.9;
+}
+
+.panel-body {
+  padding: 20px;
 }
 
 .theme-toggle-btn {
@@ -1924,7 +1949,6 @@ textarea,
   transform: scale(1.1);
 }
 
-/* (夜间模式下切换按钮的样式) */
 html.dark-mode .theme-toggle-btn {
   background: rgba(0, 0, 0, 0.2);
   color: #f3f4f6;
@@ -1934,108 +1958,7 @@ html.dark-mode .theme-toggle-btn:hover {
   background: rgba(0, 0, 0, 0.3);
 }
 
-/* --- (新增结束) --- */
-
-:root {
-  --color-body-gradient-start: #eef2ff;
-  --color-body-gradient-end: #f9fafb;
-  --color-panel-gradient-start: #6366f1;
-  --color-panel-gradient-end: #7c3aed;
-  --color-surface: #ffffff;
-  --color-surface-muted: #f5f7fb;
-  --color-text-primary: #1f2933;
-  --color-text-secondary: #4b5563;
-  --color-border: #dbe2ef;
-  --color-primary: #4f46e5;
-  --color-primary-hover: #4338ca;
-  --color-secondary: #2563eb;
-  --color-secondary-hover: #1d4ed8;
-  --color-success: #10b981;
-  --color-success-hover: #059669;
-  --color-danger: #ef4444;
-  --color-danger-hover: #dc2626;
-  --color-focus-outline: rgba(99, 102, 241, 0.45);
-  --shadow-soft: 0 10px 30px rgba(15, 23, 42, 0.08);
-  --shadow-hover: 0 16px 40px rgba(79, 70, 229, 0.16);
-}
-
-/* 1. 全局和背景 */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-}
-
-body {
-  background: linear-gradient(135deg, var(--color-body-gradient-start), var(--color-body-gradient-end));
-  min-height: 100vh;
-  padding: 20px;
-  color: var(--color-text-primary);
-  line-height: 1.5;
-}
-
-/* 2. 整体布局 */
-.layout-container {
-  display: grid;
-  grid-template-columns: minmax(600px, 2fr) minmax(350px, 1fr);
-  align-items: flex-start;
-  gap: 20px;
-  max-width: 1280px;
-  width: 100%;
-  margin: 0 auto;
-}
-
-@media (max-width: 1100px) {
-  .layout-container {
-    grid-template-columns: 1fr;
-  }
-
-  .io-panel {
-    position: static;
-    top: auto;
-  }
-}
-
-/* 3. 面板样式 */
-.panel {
-  background: var(--color-surface);
-  border-radius: 16px;
-  box-shadow: var(--shadow-soft);
-  overflow: hidden;
-  min-width: 0;
-  border: 1px solid var(--color-border);
-}
-
-.io-panel {
-  position: sticky;
-  top: 20px;
-  align-self: flex-start;
-}
-
-.panel-header {
-  background: linear-gradient(135deg, var(--color-panel-gradient-start), var(--color-panel-gradient-end));
-  color: #fff;
-  padding: 24px 20px;
-  text-align: center;
-}
-
-.panel-header h1 {
-  font-size: 28px;
-  margin-bottom: 10px;
-}
-
-.panel-header .subtitle {
-  font-size: 16px;
-  opacity: 0.9;
-}
-
-.panel-body {
-  padding: 20px;
-}
-
-/* 5. 表单和按钮 (用于模态框) */
-/* (注意：这些是全局回退样式，新的弹窗将使用更具体的 .server-form 样式) */
+/* --- 3. 表单通用样式 --- */
 .form-section {
   margin-bottom: 20px;
 }
@@ -2082,11 +2005,10 @@ label {
   display: block;
   margin-bottom: 3px;
   font-weight: 500;
-  color: #2c3e50;
+  color: var(--color-text-primary);
   font-size: 0.85rem;
 }
 
-/* v11 优化 #1: 必填项星号 */
 label .required {
   color: var(--color-danger);
   font-weight: bold;
@@ -2094,7 +2016,6 @@ label .required {
 }
 
 input[type="text"],
-select,
 textarea {
   width: 100%;
   padding: 10px 12px;
@@ -2114,7 +2035,6 @@ textarea::placeholder {
 }
 
 input[type="text"]:focus,
-select:focus,
 textarea:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-focus-outline);
@@ -2132,80 +2052,16 @@ textarea {
   font-family: "JetBrains Mono", "Fira Code", "Consolas", "Courier New", monospace;
   font-size: 14px;
   line-height: 1.5;
-  background-color: var(--color-surface);
-  color: var(--color-text-primary);
 }
 
-.color-picker {
-  height: 38px;
-  padding: 4px;
-  border-radius: 10px;
-  border: 1px solid var(--color-border);
-  width: 100%;
-  background: var(--color-surface);
-}
-
-.form-group-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 5px;
-}
-
-.form-group-checkbox label {
-  margin-bottom: 0;
-  font-weight: 400;
-  color: #333;
-  cursor: pointer;
-}
-
-.styled-checkbox {
-  width: auto;
-  height: 16px;
-  width: 16px;
-  accent-color: #4A00E0;
-  cursor: pointer;
-}
-
-.select-wrapper {
-  position: relative;
-  width: 100%;
-}
-
-.select-wrapper select {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  padding-right: 30px;
-  width: 100%;
-  cursor: pointer;
-}
-
-.select-wrapper select:disabled {
-  background-color: #f1f1f1;
-  color: #777;
-  cursor: not-allowed;
-}
-
-.select-wrapper::after {
-  content: '▼';
-  font-size: 12px;
-  color: #7e8c9a;
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  pointer-events: none;
-}
-
-/* (v16) 新增：表单辅助提示文本 */
 .form-help-text {
   font-size: 0.8rem;
-  color: #7e8c9a;
+  color: var(--color-text-secondary);
   margin-top: 5px;
   margin-bottom: 0;
 }
 
+/* --- 4. 按钮通用样式 --- */
 .btn {
   border: 1px solid transparent;
   border-radius: 10px;
@@ -2230,7 +2086,6 @@ textarea {
 .btn-primary {
   background: var(--color-success);
   color: #fff;
-  border-color: transparent;
 }
 
 .btn-primary:hover {
@@ -2240,7 +2095,6 @@ textarea {
 .btn-secondary {
   background: var(--color-secondary);
   color: #fff;
-  border-color: transparent;
 }
 
 .btn-secondary:hover {
@@ -2250,7 +2104,6 @@ textarea {
 .btn-danger {
   background: var(--color-danger);
   color: #fff;
-  border-color: transparent;
 }
 
 .btn-danger:hover {
@@ -2260,15 +2113,13 @@ textarea {
 .btn-add {
   background: var(--color-primary);
   color: #fff;
-  border-color: transparent;
 }
 
 .btn-add:hover {
   background: var(--color-primary-hover);
 }
 
-
-/* 6. 服务器列表 */
+/* --- 5. 服务器列表 --- */
 .server-list-header {
   display: flex;
   justify-content: space-between;
@@ -2301,6 +2152,11 @@ textarea {
   box-shadow: 0 10px 16px rgba(79, 70, 229, 0.15);
 }
 
+.server-item-container:has(.child-list .sortable-ghost) > .server-item-simple {
+  border-color: var(--color-success);
+  box-shadow: 0 0 0 3px var(--color-success);
+}
+
 .server-item-simple.is-child {
   background: var(--color-surface-muted);
   border-left: 4px solid var(--color-panel-gradient-end);
@@ -2311,27 +2167,21 @@ textarea {
   border-left: 4px solid var(--color-panel-gradient-start);
 }
 
-/* --- (已修复) 已隐藏服务器的删除线 (方案3) --- */
-
-/* (重要) 移除父容器的删除线，避免继承问题 */
+/* “在列表中隐藏”的删除线样式 */
 .server-item-simple.is-ignored .simple-info {
   text-decoration: none;
 }
 
-/* 只对需要删除线的文本元素单独应用 */
 .server-item-simple.is-ignored .simple-tag,
 .server-item-simple.is-ignored .simple-comment,
 .server-item-simple.is-ignored .simple-ip {
   text-decoration: line-through;
   opacity: 0.7;
-  /* 增加隐藏效果 */
 }
 
-/* 确保徽章始终清晰，没有删除线 */
 .server-item-simple.is-ignored .simple-ignored-badge {
   text-decoration: none;
   opacity: 1;
-  /* 确保徽章清晰 */
 }
 
 .simple-info {
@@ -2344,9 +2194,9 @@ textarea {
   min-width: 0;
 }
 
+/* 在桌面端，此包装器在布局上“消失”，使其子元素表现得像直接的 flex 子项 */
 .simple-info-line {
   display: contents;
-  /* (v17.33) 核心: 桌面端让此包装器"消失" */
 }
 
 .simple-tag {
@@ -2355,7 +2205,6 @@ textarea {
   padding: 3px 8px;
   border-radius: 4px;
   flex-shrink: 0;
-  /* <--- (v17.24) 新增此行 */
 }
 
 .simple-comment {
@@ -2372,10 +2221,7 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   flex-shrink: 1;
-  /* 允许 IP 地址收缩 */
   min-width: 0;
-  /* 允许收缩到 0 */
-  /* 已移除 flex-basis 和 flex-grow，使其在宽屏下正常排列 */
 }
 
 .simple-ip.with-comment {
@@ -2389,7 +2235,6 @@ textarea {
   font-weight: 500;
   color: var(--color-text-secondary);
   flex-shrink: 0;
-  /* <--- (v17.24) 新增此行 */
 }
 
 .simple-actions {
@@ -2398,7 +2243,8 @@ textarea {
   margin-left: 10px;
 }
 
-.btn-add-child-simple {
+.btn-add-child-simple,
+.btn-edit-simple {
   background: var(--color-surface-muted);
   color: var(--color-primary);
   border: 1px solid var(--color-border);
@@ -2406,20 +2252,7 @@ textarea {
 }
 
 .btn-add-child-simple:hover,
-.btn-add-child-simple:focus-visible {
-  background: var(--color-body-gradient-start);
-  border-color: var(--color-primary);
-  color: var(--color-primary);
-}
-
-.btn-edit-simple {
-  background: var(--color-surface-muted);
-  color: var(--color-primary);
-  /* (v17.13) 保持颜色 */
-  border: 1px solid var(--color-border);
-  transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease;
-}
-
+.btn-add-child-simple:focus-visible,
 .btn-edit-simple:hover,
 .btn-edit-simple:focus-visible {
   background: var(--color-body-gradient-start);
@@ -2447,21 +2280,29 @@ textarea {
   text-align: center;
   padding: 20px;
   color: var(--color-text-secondary);
-  /* (修正) */
   background: var(--color-surface-muted);
-  /* (修正) */
   border-radius: 8px;
   margin-top: 15px;
 }
 
-.parent-warning {
-  color: #d32f2f;
-  font-size: 0.85rem;
-  margin-top: 5px;
+/* --- 6. 拖拽与列表结构 --- */
+.server-item-container {
+  margin-bottom: 6px;
+  position: relative;
 }
 
-.server-form {
-  padding: 5px;
+.child-list {
+  margin-left: 20px;
+}
+
+.server-item-container.is-parent-container .child-list {
+  margin-top: 6px;
+  min-height: 40px;
+}
+
+.server-item-container:not(.is-parent-container) .child-list {
+  margin-top: 0;
+  min-height: 0;
 }
 
 .server-item-simple.sortable-drag {
@@ -2482,7 +2323,54 @@ textarea {
   visibility: hidden;
 }
 
-/* 7. 模态弹窗 (Alert/Confirm) */
+/* 减小子列表占位符的高度，增加拖拽到根列表的容错率 */
+.child-list.sortable-ghost {
+  min-height: 30px;
+}
+
+.server-list-anim-root-enter-from,
+.server-list-anim-root-leave-to {
+  opacity: 0;
+  transform: scale(0.9);
+}
+
+.server-list-anim-root-enter-active,
+.server-list-anim-root-leave-active {
+  transition: all 0.3s ease;
+}
+
+.server-list-anim-root-move {
+  transition: transform 0.3s cubic-bezier(0.55, 0, 0.1, 1);
+}
+
+.server-item-container.sortable-ghost {
+  background: var(--color-body-gradient-start);
+  border: 2px dashed var(--color-primary);
+  opacity: 0.7;
+  border-radius: 8px;
+  min-height: 50px;
+}
+
+.server-item-container.sortable-ghost>* {
+  visibility: hidden;
+}
+
+.server-list-anim-child-enter-active,
+.server-list-anim-child-leave-active {
+  transition: all 0.3s ease;
+}
+
+.server-list-anim-child-enter-from,
+.server-list-anim-child-leave-to {
+  opacity: 0;
+  transform: translateX(30px);
+}
+
+.server-list-anim-child-move {
+  transition: transform 0.3s ease;
+}
+
+/* --- 7. 通用弹窗 (Alert/Confirm) --- */
 .modal-overlay {
   position: fixed;
   inset: 0;
@@ -2493,10 +2381,6 @@ textarea {
   justify-content: center;
   padding: 20px;
   z-index: 2000;
-}
-
-.modal-overlay.edit-modal {
-  z-index: 1000;
 }
 
 .modal-box {
@@ -2608,21 +2492,16 @@ textarea {
   opacity: 0;
 }
 
-/* --- 编辑弹窗样式 --- */
+/* --- 8. “添加/编辑”服务器弹窗 --- */
 .modal-overlay.edit-modal {
   z-index: 1500;
 }
 
 .modal-box.edit-modal-box {
   max-width: 760px;
-
-  /* --- (v17.11) 新增：flex 布局 --- */
   display: flex;
   flex-direction: column;
-
-  /* * 1. 使用 90dvh (动态视口高度) 来适应手机工具栏
-   * 2. 90vh 是为不支持 dvh 的旧浏览器的后备 
-   */
+  /* 适应手机端，允许内容滚动 */
   max-height: 90vh;
   max-height: 90dvh;
 }
@@ -2667,7 +2546,6 @@ textarea {
   overflow-y: auto;
   background: var(--color-surface);
   scrollbar-gutter: stable;
-
   flex-grow: 1;
   min-height: 0;
 }
@@ -2703,8 +2581,7 @@ textarea {
   margin-left: 4px;
 }
 
-.server-form input[type="text"],
-.server-form select {
+.server-form input[type="text"] {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -2715,60 +2592,13 @@ textarea {
   padding-left: 26px;
   color: var(--color-text-primary);
   position: relative;
-  /* <-- (v17.13) 新增 */
   z-index: 1;
-  /* <-- (v17.13) 新增 */
 }
 
-.server-form input[type="text"]:focus,
-.server-form select:focus {
+.server-form input[type="text"]:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
-}
-
-.server-form .color-picker {
-  height: 48px;
-  padding: 4px;
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  width: 100%;
-  cursor: pointer;
-  background: var(--color-surface);
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
-}
-
-.server-form .color-picker:focus {
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-focus-outline);
-  outline: none;
-}
-
-.server-form .form-group-checkbox {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-top: 10px;
-  padding: 10px 0;
-}
-
-.server-form .form-group-checkbox label {
-  margin-bottom: 0;
-  font-weight: 500;
-  color: var(--color-text-primary);
-  cursor: pointer;
-  font-size: 0.95rem;
-}
-
-.server-form .styled-checkbox {
-  width: 20px;
-  height: 20px;
-  accent-color: var(--color-primary);
-  cursor: pointer;
-}
-
-.server-form .select-wrapper::after {
-  right: 15px;
 }
 
 .server-form .form-help-text {
@@ -2811,99 +2641,7 @@ textarea {
   padding-left: 4px;
 }
 
-@media (max-width: 440px) {
-  .server-form .form-row {
-    flex-direction: column;
-    gap: 15px;
-  }
-
-  .edit-modal-box {
-    width: 95%;
-  }
-}
-
-/* --- 弹窗美化 - 结束 --- */
-
-
-/* 9. (v14/v15) 拖拽容器和子列表样式 (原始代码，保持不变) */
-.server-item-container {
-  margin-bottom: 6px;
-  position: relative;
-}
-
-.child-list {
-  margin-left: 40px;
-}
-
-.server-item-container.is-parent-container .child-list {
-  margin-top: 6px;
-  min-height: 20px;
-}
-
-.server-item-container:not(.is-parent-container) .child-list {
-  margin-top: 0;
-  min-height: 0;
-}
-
-/* (v16 建议 1)
- * 减小子列表 "幽灵" (占位符) 的最小高度
- * 这使得意外拖入子列表的难度增加
- */
-.child-list.sortable-ghost {
-  min-height: 30px;
-  /* <-- 原为 50px */
-  background: var(--color-body-gradient-start);
-  border: 2px dashed var(--color-primary);
-  border-radius: 8px;
-}
-
-.child-list.sortable-ghost>* {
-  visibility: hidden;
-}
-
-.server-list-anim-root-enter-from,
-.server-list-anim-root-leave-to {
-  opacity: 0;
-  transform: scale(0.9);
-}
-
-.server-list-anim-root-enter-active,
-.server-list-anim-root-leave-active {
-  transition: all 0.3s ease;
-}
-
-.server-list-anim-root-move {
-  transition: transform 0.3s cubic-bezier(0.55, 0, 0.1, 1);
-}
-
-.server-item-container.sortable-ghost {
-  background: var(--color-body-gradient-start);
-  border: 2px dashed var(--color-primary);
-  opacity: 0.7;
-  border-radius: 8px;
-  min-height: 50px;
-}
-
-.server-item-container.sortable-ghost>* {
-  visibility: hidden;
-}
-
-.server-list-anim-child-enter-active,
-.server-list-anim-child-leave-active {
-  transition: all 0.3s ease;
-}
-
-.server-list-anim-child-enter-from,
-.server-list-anim-child-leave-to {
-  opacity: 0;
-  transform: translateX(30px);
-}
-
-.server-list-anim-child-move {
-  transition: transform 0.3s ease;
-}
-
-/* 1. 复合框的容器 */
+/* --- 9. 复合输入框 (标签+颜色) --- */
 .form-compound-input {
   display: flex;
   align-items: center;
@@ -2921,7 +2659,6 @@ textarea {
   box-shadow: 0 0 0 3px var(--color-focus-outline);
 }
 
-/* 2. 内部的文本输入框 */
 .form-compound-input-text {
   flex: 1 1 auto;
   border: none !important;
@@ -2932,34 +2669,13 @@ textarea {
   min-width: 0;
 }
 
-/* * 3. (已修正) 内部的颜色选择器
- * 我们添加了 .server-form 前缀来提高优先级
-*/
-.server-form .form-compound-input-color {
-  flex: 0 0 auto;
-  width: 44px;
-  /* <--- 现在这个会生效了 */
-  height: 44px;
-  /* <--- 这个也会生效 */
-  margin: 2px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  padding: 4px;
-}
-
-/* (已修正) 同样为 :focus 规则添加前缀 */
-.server-form .form-compound-input-color:focus {
-  outline: none;
-  box-shadow: none;
-}
-
+/* --- 10. 自定义下拉框 (预设/父服务器) --- */
 .custom-select-container {
   position: relative;
   width: 100%;
 }
 
 .custom-select-trigger {
-  /* 模拟 .server-form input[type="text"] 样式 */
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -2967,27 +2683,17 @@ textarea {
   background: var(--color-surface);
   box-shadow: 0 2px 6px rgba(15, 23, 42, 0.06);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
-
-  /* 按钮特定样式 */
   display: flex;
   align-items: center;
   justify-content: space-between;
   text-align: left;
   cursor: pointer;
   font-size: 0.95rem;
-  /* 匹配 input */
   color: var(--color-text-primary);
-  /* 匹配 input */
-
-  /* 模拟 :focus 样式 */
   outline: none;
-
-  /* 模拟 input padding-left: 26px (已由 ::before 伪元素占用) */
   padding-left: 26px;
   position: relative;
-  /* <-- (v17.13) 新增 */
   z-index: 1;
-  /* <-- (v17.13) 新增 */
 }
 
 .custom-select-trigger:focus-visible {
@@ -3002,13 +2708,11 @@ textarea {
   opacity: 0.7;
 }
 
-/* 触发器内部布局 */
 .selected-option-content {
   display: flex;
   align-items: center;
   gap: 8px;
   overflow: hidden;
-  /* 关键：防止内容溢出 */
 }
 
 .option-text {
@@ -3028,7 +2732,6 @@ textarea {
   transition: transform 0.2s ease;
   transform-origin: center;
   margin-left: 8px;
-  /* 增加一点间距 */
   flex-shrink: 0;
 }
 
@@ -3036,11 +2739,9 @@ textarea {
   transform: rotate(180deg);
 }
 
-/* 选项列表 */
 .custom-select-options {
   position: absolute;
   top: 105%;
-  /* 紧贴在触发器下方 */
   left: 0;
   right: 0;
   background: var(--color-surface);
@@ -3048,7 +2749,6 @@ textarea {
   border-radius: 12px;
   box-shadow: var(--shadow-soft);
   z-index: 1600;
-  /* 必须高于 modal-body (1500) */
   max-height: 200px;
   overflow-y: auto;
   list-style: none;
@@ -3057,7 +2757,6 @@ textarea {
   overscroll-behavior-y: contain;
 }
 
-/* 单个选项 */
 .custom-select-option {
   display: flex;
   align-items: center;
@@ -3068,13 +2767,9 @@ textarea {
   transition: background 0.2s ease;
   color: var(--color-text-primary);
   overflow: hidden;
-  /* 确保内容不溢出 */
 }
 
-.custom-select-option:hover {
-  background-color: var(--color-body-gradient-start);
-}
-
+.custom-select-option:hover,
 .custom-select-option.is-active {
   background-color: var(--color-body-gradient-start);
 }
@@ -3096,7 +2791,6 @@ textarea {
   background: transparent;
 }
 
-/* 内部小标签 (用于触发器和选项) */
 .simple-tag-small {
   font-size: 0.8rem;
   font-weight: 500;
@@ -3105,11 +2799,89 @@ textarea {
   flex-shrink: 0;
 }
 
-/* (优化) Toast 小提示样式 */
+.custom-select-options.is-parent-select {
+  top: auto;
+  bottom: 105%;
+  box-shadow: var(--shadow-soft);
+}
+
+/* --- 11. 自定义颜色选择器 --- */
+.color-picker-wrapper {
+  flex: 0 0 auto;
+  position: relative;
+  width: 44px;
+  height: 44px;
+  margin: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.custom-color-trigger {
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  cursor: pointer;
+  padding: 0;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.custom-color-trigger:hover {
+  transform: scale(1.1);
+}
+
+.custom-color-trigger:focus-visible {
+  outline: 3px solid var(--color-focus-outline);
+  outline-offset: 2px;
+}
+
+.color-picker-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  z-index: 1800;
+}
+
+.color-picker-modal-box {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-hover);
+  padding: 12px;
+  animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+  overscroll-behavior-y: contain;
+}
+
+/* 覆盖 vue3-colorpicker 的默认样式 */
+.color-picker-modal-box .vc-color-wrap {
+  border: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  width: 280px;
+}
+
+.color-picker-modal-box .vc-color-wrap.is-widget {
+  padding: 0 !important;
+}
+
+.btn-color-picker-done {
+  width: 100%;
+  margin-top: 10px;
+  font-size: 1rem;
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+
+/* --- 12. Toast 提示 --- */
 .toast-notification {
   position: fixed;
   top: 80px;
-  /* 调整位置，使其更显眼 */
   left: 50%;
   transform: translateX(-50%);
   background-color: var(--color-success);
@@ -3132,17 +2904,8 @@ textarea {
   transform: translate(-50%, -20px);
 }
 
-
-.custom-select-options.is-parent-select {
-  top: auto;
-  bottom: 105%;
-  box-shadow: var(--shadow-soft);
-  /* (可选) 确保阴影在上方也好看 */
-}
-
-/* --- (v17.4) 1. 自定义夜间模式滚动条 --- */
+/* --- 13. 自定义滚动条 (夜间模式) --- */
 html.dark-mode {
-  /* 适用于 Firefox */
   scrollbar-color: #6b7280 #374151;
   scrollbar-width: thin;
 }
@@ -3154,215 +2917,68 @@ html.dark-mode ::-webkit-scrollbar {
 
 html.dark-mode ::-webkit-scrollbar-track {
   background: var(--color-surface-muted);
-  /* 滚动条轨道背景 */
   border-radius: 4px;
 }
 
 html.dark-mode ::-webkit-scrollbar-thumb {
   background-color: #6b7280;
-  /* 滚动条滑块 */
   border-radius: 4px;
-  /* (可选) 创建一个“内边距”效果，让滑块看起来更细 */
   border: 2px solid var(--color-surface-muted);
 }
 
 html.dark-mode ::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-text-secondary);
-  /* 悬停时变亮 */
 }
 
-/* --- (v17.4) 1. 自定义夜间模式滚动条 --- */
-html.dark-mode {
-  /* 适用于 Firefox */
-  scrollbar-color: #6b7280 #374151;
-  scrollbar-width: thin;
-}
-
-html.dark-mode ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-html.dark-mode ::-webkit-scrollbar-track {
-  background: var(--color-surface-muted);
-  /* 滚动条轨道背景 */
-  border-radius: 4px;
-}
-
-html.dark-mode ::-webkit-scrollbar-thumb {
-  background-color: #6b7280;
-  /* 滚动条滑块 */
-  border-radius: 4px;
-  /* (可选) 创建一个“内边距”效果，让滑块看起来更细 */
-  border: 2px solid var(--color-surface-muted);
-}
-
-html.dark-mode ::-webkit-scrollbar-thumb:hover {
-  background-color: var(--color-text-secondary);
-  /* 悬停时变亮 */
-}
-
-/* --- (v17.6) 微调 Font Awesome SVG 图标对齐 --- */
-
-/* * 目标：按钮和标签中的图标
- * 作用：确保图标与旁边的文本垂直居中 
- */
+/* --- 14. 图标对齐修正 --- */
 .btn svg,
 .btn-modal-cancel svg,
 .btn-modal-confirm svg,
-.form-group-checkbox label svg,
 .toggle-switch-label svg,
 .modal-header h3 svg {
-  /* * 这是一个魔法数字，用于将 SVG 稍微向下移动一点
-   * 使其在视觉上与文本的“中线”对齐 
-   */
   vertical-align: -0.125em;
-
-  /* (可选) 如果图标和文本贴得太近，请取消注释此行 */
-  /* margin-right: 0.3em; */
 }
 
-/* * 目标：单独的图标 (例如夜间模式、关闭按钮) 
- * 作用：确保它们正确地填充其容器 
- */
 .theme-toggle-btn svg,
 .btn-close-modal svg {
   vertical-align: middle;
 }
 
-/* --- (v17.7) 自定义颜色选择器样式 --- */
-.color-picker-wrapper {
-  /* * 1. 模拟 .form-compound-input-color 的大小和位置 
-   * (flex: 0 0 auto; width: 44px; height: 44px; margin: 2px;)
-   */
-  flex: 0 0 auto;
-  position: relative;
-  width: 44px;
-  height: 44px;
-  margin: 2px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
-.custom-color-trigger {
-  width: 36px;
-  height: 36px;
-  border: 1px solid var(--color-border);
-  border-radius: 8px;
-  /* 稍小的圆角 */
-  cursor: pointer;
-  padding: 0;
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
-}
-
-.custom-color-trigger:hover {
-  transform: scale(1.1);
-}
-
-.custom-color-trigger:focus-visible {
-  outline: 3px solid var(--color-focus-outline);
-  outline-offset: 2px;
-}
-
-.color-picker-modal-overlay {
-  /* 1. 复制 .modal-overlay 的样式 */
-  position: fixed;
-  inset: 0;
-  background: rgba(15, 23, 42, 0.55);
-  backdrop-filter: blur(4px);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-
-  /* 2. 确保它在编辑弹窗 (1500) 和下拉框 (1600) 之上 */
-  z-index: 1800;
-}
-
-.color-picker-modal-box {
-  /* 1. 复制 .modal-box 的样式 */
-  background: var(--color-surface);
-  border: 1px solid var(--color-border);
-  border-radius: 16px;
-  box-shadow: var(--shadow-hover);
-
-  /* 2. 自定义样式 */
-  padding: 12px;
-  /* 紧凑一点 */
-  animation: modal-pop-in 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  overscroll-behavior-y: contain;
-}
-
-/* 3. (重要) 覆盖 vue3-colorpicker 的默认样式 */
-.color-picker-modal-box .vc-color-wrap {
-  border: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-  width: 280px;
-  /* (v17.10) 给予一个在手机上刚好的固定宽度 */
-}
-
-.color-picker-modal-box .vc-color-wrap.is-widget {
-  padding: 0 !important;
-}
-
-/* 4. "完成" 按钮的样式 */
-.btn-color-picker-done {
-  width: 100%;
-  /* 占满宽度 */
-  margin-top: 10px;
-  font-size: 1rem;
-  padding-top: 12px;
-  padding-bottom: 12px;
-}
-
-/* --- (v17.13) 新增：统一的图标按钮样式 --- */
+/* --- 15. 统一列表项中的图标按钮样式 --- */
 .btn-icon-simple {
-  /* 1. 统一大小和形状 */
   width: 32px;
   height: 32px;
   padding: 0;
   font-size: 0.9rem;
-  /* 统一图标大小 */
   border-radius: 8px;
-
-  /* 2. 居中图标 */
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 
-/* 3. 确保悬停时样式一致 (无 transform) */
 .btn-icon-simple:hover,
 .btn-icon-simple:focus-visible {
   transform: none;
   box-shadow: none;
 }
 
-/* 4. 将新样式应用到 "X" 按钮 */
-/* 4. 将新样式应用到删除按钮 */
 .btn-remove-simple {
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border);
   color: var(--color-danger);
-  /* <-- (新增) 默认状态即为红色 */
 }
 
 .btn-remove-simple:hover,
 .btn-remove-simple:focus-visible {
   background: var(--color-danger);
-  /* <-- (修改) 悬停时背景变红 */
   border-color: var(--color-danger-hover);
   color: #fff;
-  /* <-- (修改) 悬停时图标变白 */
 }
 
-/* --- (v17.35) 新增：切换开关样式 --- */
+/* --- 16. 切换开关(Toggle Switch)样式 --- */
 .form-group-toggle {
   display: flex;
   align-items: center;
-  /* 关键：修复对齐问题 */
   gap: 12px;
   margin-top: 15px;
   padding-left: 5px;
@@ -3374,28 +2990,22 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   cursor: pointer;
   user-select: none;
   font-size: 0.95rem;
-  /* 匹配 .form-group-checkbox label */
 }
 
 .toggle-switch {
   position: relative;
   display: inline-block;
   width: 50px;
-  /* 开关宽度 */
   height: 28px;
-  /* 开关高度 */
   flex-shrink: 0;
-  /* 防止被压缩 */
 }
 
-/* 隐藏默认的 checkbox */
 .toggle-switch-input {
   opacity: 0;
   width: 0;
   height: 0;
 }
 
-/* 开关的 "轨道" */
 .toggle-switch-slider {
   position: absolute;
   cursor: pointer;
@@ -3406,10 +3016,8 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   background-color: var(--color-border);
   transition: .3s;
   border-radius: 28px;
-  /* 圆角 */
 }
 
-/* 开关的 "滑块" (白色圆点) */
 .toggle-switch-slider:before {
   position: absolute;
   content: "";
@@ -3421,72 +3029,57 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   transition: .3s;
   border-radius: 50%;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
-  /* 轻微阴影 */
 }
 
-/* 选中时的样式：轨道变色 */
 .toggle-switch-input:checked+.toggle-switch-slider {
   background-color: var(--color-primary);
 }
 
-/* 选中时的样式：滑块移动 */
 .toggle-switch-input:checked+.toggle-switch-slider:before {
   transform: translateX(22px);
-  /* 移动距离: 50(宽) - 20(滑块) - 4(左距) - 4(右距) = 22px */
 }
 
-/* 焦点样式 (用于键盘导航) */
 .toggle-switch-input:focus-visible+.toggle-switch-slider {
   box-shadow: 0 0 0 3px var(--color-focus-outline);
 }
 
-/* --- (v17.35) 切换开关样式结束 --- */
+/* --- 17. 移动端适配 (max-width: 600px) --- */
+@media (max-width: 1100px) {
+  .layout-container {
+    grid-template-columns: 1fr;
+  }
 
-/* --- (v17.22) 移动端适配：使用 HTML 包装器 --- */
+  .io-panel {
+    position: static;
+    top: auto;
+  }
+}
 
 @media (max-width: 600px) {
-
-  /* 1. (不变) 父容器顶部对齐 */
   .server-item-simple {
     padding: 10px 10px 12px 10px;
     align-items: flex-start;
   }
 
-  /* 2. (v17.33) 重构 simple-info 为垂直布局 */
   .simple-info {
     flex-direction: column;
-    /* 强制垂直堆叠 */
     align-items: flex-start;
-    /* 左对齐 */
     gap: 4px;
-    /* 行间距 */
     white-space: normal;
-    /* 允许换行（虽然我们内部会阻止）*/
-
-    /* (v17.33) 移除旧规则 */
-    /* flex-wrap: wrap; */
-    /* align-items: center; */
   }
 
-  /* (v17.33) 新增：行容器样式 */
   .simple-info-line {
     display: flex;
-    /* 变为 flex 布局 */
     align-items: center;
-    /* 内部元素垂直居中 */
     gap: 8px;
-    /* 元素间距 (tag 和 comment 之间) */
     width: 100%;
-    /* 占满父容器宽度 */
   }
 
-  /* --- 4. 第一行项目 --- */
   .simple-tag {
     white-space: nowrap;
     flex-shrink: 0;
   }
 
-  /* (v17.33) 重构 .simple-comment */
   .simple-comment {
     white-space: nowrap;
     overflow: hidden;
@@ -3494,26 +3087,20 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
     flex-shrink: 1;
     min-width: 0;
     flex: 1;
-    /* 核心：让 comment 填满第一行的剩余空间 */
   }
 
-  /* --- 5. 第二行项目 --- */
-  /* (v17.33) 重构 .simple-ip */
   .simple-ip {
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     flex-shrink: 1;
     min-width: 0;
-    /* 已移除 flex: 1，使其不再推开徽章 */
   }
 
   .simple-ignored-badge {
     white-space: nowrap;
     flex-shrink: 0;
   }
-
-  /* --- 6. (不变) 修复样式和拖拽柄 --- */
 
   .simple-ip.with-comment {
     margin-left: 0;
@@ -3527,39 +3114,34 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
   .simple-actions {
     gap: 5px;
     margin-left: 8px;
-    /* 恢复 margin */
     padding-top: 0;
   }
 
-  .simple-ip.with-comment {
-    margin-left: 0;
-    font-size: 0.85rem;
-  }
-
-  /* --- (v17.23) 修复服务器列表标题换行 --- */
-
   .server-list-header {
     flex-wrap: wrap;
-    /* 1. 允许标题和按钮组换行 */
     gap: 10px 15px;
-    /* 2. 换行后的垂直/水平间距 */
   }
 
   .server-list-header h3 {
     white-space: nowrap;
-    /* 3. 确保 "服务器列表" 5个字不换行 */
     font-size: 1.3rem;
-    /* 4. 稍微缩小字体 */
     margin-bottom: 0;
-    /* 5. 移除 h3 上的间距，使用 gap 代替 */
   }
 
   .header-actions {
     flex-grow: 1;
-    /* 6. (可选) 让按钮组在换行时占满宽度 */
     justify-content: flex-end;
-    /* 7. (可选) 让按钮保持在右侧 */
+  }
+}
+
+@media (max-width: 440px) {
+  .server-form .form-row {
+    flex-direction: column;
+    gap: 15px;
   }
 
+  .edit-modal-box {
+    width: 95%;
+  }
 }
 </style>
