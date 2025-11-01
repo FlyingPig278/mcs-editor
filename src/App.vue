@@ -19,6 +19,112 @@ import {
 } from '@fortawesome/free-solid-svg-icons'
 import { ColorPicker } from 'vue3-colorpicker'
 import 'vue3-colorpicker/style.css'
+import pako from 'pako'
+
+// (优化) 定义服务器数据在紧凑数组中的位置
+const S_IP = 0;
+const S_COMMENT = 1;
+const S_TAG = 2;
+const S_TAG_COLOR = 3;
+const S_IGNORE = 4;
+const S_CHILDREN = 5;
+
+// (优化) 将清理过的 JSON 树转换为紧凑数组
+function jsonToCompactArray(servers: Server[]): any[] {
+  if (!servers) return [];
+  return servers.map(server => {
+    const children = (server.children && server.children.length > 0)
+      ? jsonToCompactArray(server.children)
+      : 0;
+
+    return [
+      server.ip,
+      server.comment || 0,
+      server.tag || 0,
+      server.tag_color || 0,
+      server.ignore_in_list ? 1 : 0,
+      children
+    ];
+  });
+}
+
+// (优化) 将紧凑数组转换回 JSON 树
+function compactArrayToJson(compactData: any[]): Server[] {
+  return compactData.map(item => {
+    const children = Array.isArray(item[S_CHILDREN])
+      ? compactArrayToJson(item[S_CHILDREN])
+      : [];
+
+    const server: Server = {
+      ip: item[S_IP],
+      comment: item[S_COMMENT] || '',
+      tag: item[S_TAG] || '',
+      tag_color: item[S_TAG_COLOR] || '333333',
+      tag_color_with_hash: item[S_TAG_COLOR] ? `#${item[S_TAG_COLOR]}` : '#333333',
+      ignore_in_list: item[S_IGNORE] === 1,
+      children: children,
+      // 以下是需要补全的默认/计算属性
+      server_type: 'standalone', // 将在 buildTree 中被修正
+      parent_ip: '', // 将在 buildTree 中被修正
+      selectedPreset: ''
+    };
+    return server;
+  });
+}
+
+
+// --- (优化) Zlib + Base64 编解码 --- 
+
+function toUrlSafeBase64(base64: string): string {
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function fromUrlSafeBase64(urlSafeBase64: string): string {
+  let base64 = urlSafeBase64.replace(/-/g, '+').replace(/_/g, '/');
+  while (base64.length % 4) {
+    base64 += '=';
+  }
+  return base64;
+}
+
+function compressConfig(configObject: AppConfig): string {
+  try {
+    const compactServers = jsonToCompactArray(configObject.servers);
+    const compactStructure = [
+      configObject.footer || 0,
+      configObject.show_offline_by_default ? 1 : 0,
+      compactServers
+    ];
+    const jsonString = JSON.stringify(compactStructure);
+    const compressed = pako.deflate(jsonString, { level: 9 });
+    const base64 = btoa(String.fromCharCode.apply(null, compressed as any));
+    return toUrlSafeBase64(base64);
+  } catch (e) {
+    console.error("压缩失败:", e);
+    return '';
+  }
+}
+
+function decompressConfig(encodedString: string): AppConfig | null {
+  try {
+    const base64 = fromUrlSafeBase64(encodedString);
+    const binaryString = atob(base64);
+    const charData = binaryString.split('').map(x => x.charCodeAt(0));
+    const inflated = pako.inflate(new Uint8Array(charData), { to: 'string' });
+    const compactStructure = JSON.parse(inflated);
+
+    const servers = compactArrayToJson(compactStructure[2]);
+
+    return {
+      footer: compactStructure[0] || { text: 'Powered by MCSManager' },
+      show_offline_by_default: compactStructure[1] === 1,
+      servers: servers
+    };
+  } catch (e) {
+    console.error("解压失败:", e);
+    return null;
+  }
+}
 
 // --- (TS) 核心数据结构定义 ---
 interface Server {
@@ -79,29 +185,26 @@ const serverTree = ref<Server[]>([])
 
 const jsonInput = ref(``)
 
-// --- 4.5. (新增) 夜间模式状态 ---
-const isDarkMode = ref(false)
+// (v17.15) 主题切换
+const isDarkMode = ref(false);
 
-/**
- * @description 将主题应用到 <html> 标签
- */
-function applyTheme(isDark: boolean) {
-  if (isDark) {
-    document.documentElement.classList.add('dark-mode')
-    isDarkMode.value = true
+function applyTheme(dark: boolean) {
+  isDarkMode.value = dark;
+  if (dark) {
+    document.documentElement.classList.add('dark');
+    localStorage.setItem('theme', 'dark');
   } else {
-    document.documentElement.classList.remove('dark-mode')
-    isDarkMode.value = false
+    document.documentElement.classList.remove('dark');
+    localStorage.setItem('theme', 'light');
   }
 }
 
-/**
- * @description 切换主题并保存到 localStorage
- */
 function toggleTheme() {
-  const newThemeState = !isDarkMode.value
-  applyTheme(newThemeState)
-  localStorage.setItem('theme', newThemeState ? 'dark' : 'light')
+  applyTheme(!isDarkMode.value);
+}
+
+function toggleTheme() {
+  applyTheme(!isDarkMode.value);
 }
 
 // (我们将在下面的 onMounted 中调用它)
@@ -266,49 +369,42 @@ const potentialParentServers = computed<Server[]>(() => {
  * @description 计算出最终用于“导出”的 JSON 字符串。
  * (v_Fix) 修改为导出 'serverTree' (嵌套结构) 以方便后端渲染。
  */
-const outputJson = computed<string>(() => {
-
-  /**
-   * 递归清理节点函数
-   * @param {object} serverNode - 来自 serverTree 的一个服务器节点
-   * @returns {object} 清理后的节点
-   */
-  function cleanNode(serverNode: Server): Partial<Server> {
-    // 1. 复制节点，但不包括 UI 辅助属性 和 children (暂时)
-    const {
-      tag_color_with_hash,
-      selectedPreset,
-      children,
-      ...cleanServer
-    } = serverNode;
-
-    // 2. 需求 3: 清理 ignore_in_list (如果为 false)
-    if (cleanServer.ignore_in_list === false) {
-      delete (cleanServer as Partial<Server>).ignore_in_list;
+const outputJson = computed<AppConfig>(() => {
+  // 1. 创建一个干净的、只包含导出所需数据的服务器树
+  function cleanNode(node: Server): Server {
+    const newNode: Server = {
+      ip: node.ip,
+      comment: node.comment,
+      tag: node.tag,
+      tag_color: node.tag_color,
+      tag_color_with_hash: node.tag_color_with_hash,
+      ignore_in_list: node.ignore_in_list,
+      children: [], // Default to empty array
+      // Fill in other required Server properties with defaults
+      server_type: node.server_type || 'standalone',
+      parent_ip: node.parent_ip || '',
+      selectedPreset: node.selectedPreset || ''
+    };
+    if (node.children && node.children.length > 0) {
+      newNode.children = node.children.map(cleanNode);
     }
-
-    // 3. 递归处理子节点
-    if (children && children.length > 0) {
-      // 递归调用 cleanNode 来清理所有子节点
-      (cleanServer as Server).children = children.map(cleanNode) as Server[];
-    }
-
-    return cleanServer;
+    return newNode;
   }
 
-  // 1. 构造最终的配置对象
-  const cleanConfig = {
+  const cleanServers = config.value.servers.map(cleanNode);
+
+  // 2. 构建最终的配置对象
+  return {
     footer: config.value.footer,
     show_offline_by_default: config.value.show_offline_by_default,
-
-    // 2. 核心: 
-    // 我们不再使用扁平的 config.value.servers
-    // 而是使用嵌套的 serverTree.value，并用 cleanNode 递归清理它
-    servers: serverTree.value.map(cleanNode)
+    servers: cleanServers
   };
-
-  // 3. 格式化并返回 JSON 字符串
-  return JSON.stringify(cleanConfig, null, 2);
+});
+/**
+ * @description (优化) 计算出用于 URL 分享的压缩字符串
+ */
+const compressedOutput = computed<string>(() => {
+  return compressConfig(outputJson.value);
 });
 
 /**
@@ -367,6 +463,71 @@ function onModalCancel() {
   }
   modalResolve.value = null
 }
+
+// (v17.34) defineExpose, 解决模板引用问题
+defineExpose({
+  // Data
+  config,
+  jsonInput,
+  outputJson,
+  compressedOutput,
+  serverList,
+  isModalVisible,
+  modalMode,
+  currentServerData,
+  isPresetSelectOpen,
+  isParentSelectOpen,
+  potentialParentServers,
+  selectedParent,
+  selectedPreset,
+  isSaving,
+  isDirty,
+  isColorPickerVisible,
+
+  // Computed
+  isAddMode,
+  parentServerOptions,
+  presetOptions,
+
+  // Methods
+  applyTheme,
+  toggleTheme,
+  buildTree,
+  flattenTreeAndSync,
+  parseAndSetConfig,
+  addServer,
+  editServer,
+  removeServer,
+  addChildServer,
+  openServerModal,
+  closeServerModal,
+  saveServer,
+  checkMove,
+  handleGlobalKeydown,
+  showConfirm,
+  showAlert,
+  showToast,
+  copyToClipboard,
+  loadConfig,
+  onColorInput,
+  checkIfCustom,
+  sanitizeIpForId,
+  removeAllServers,
+  handleClickOutsideParentSelect,
+  handleClickOutsidePresetSelect,
+  toggleParentSelect,
+  togglePresetSelect,
+  selectParent,
+  selectPreset,
+  navigateParentOptions,
+  navigatePresetOptions,
+  confirmSelectParent,
+  confirmSelectPreset,
+  getPresetName,
+  getParentServerName,
+  onModalConfirm,
+  onModalCancel
+});
 
 /**
  * @description (优化) 显示一个短暂的 Toast 提示
@@ -706,7 +867,7 @@ function selectPreset(presetKey: string) {
   if (currentServerData.value) {
     currentServerData.value.selectedPreset = presetKey
     // 关键: 选择后要立即应用 (applyPreset 会处理空 key)
-    applyPreset(currentServerData.value as Server)
+    // applyPreset(preset, true); // (v17.34) 移除，因为逻辑已合并
   }
   isPresetSelectOpen.value = false
   activePresetIndex.value = -1; // 重置
@@ -820,7 +981,7 @@ function buildTree(flatList: Server[]): Server[] {
  * @description 解析 JSON 字符串并设置到 `config` 状态中。(已重构)
  * @returns {boolean} - 解析和加载是否成功。
  */
-function parseAndSetConfig(jsonString: string): boolean {
+function parseAndSetConfig(input: string | AppConfig): boolean {
   // (优化) 将内部逻辑拆分为独立的、可测试的函数
   function flattenImportedServers(servers: any[], parentIp = ""): any[] {
     if (!Array.isArray(servers)) return [];
@@ -871,291 +1032,290 @@ function parseAndSetConfig(jsonString: string): boolean {
     return validatedServers.sort((a, b) => (a.priority || 0) - (b.priority || 0));
   }
 
+  let importedConfig: any;
   try {
-    if (!jsonString.trim()) {
-      jsonString = '{}'; // 处理空字符串或只有空格的输入
+    if (typeof input === 'string') {
+      importedConfig = JSON.parse(input);
+    } else {
+      importedConfig = input;
     }
-    const data = JSON.parse(jsonString);
-    const defaultConfig: AppConfig = {
-      footer: "",
-      servers: [],
-      show_offline_by_default: false
-    };
-
-    let finalServers: Server[] = [];
-    if (data.servers && Array.isArray(data.servers)) {
-      const flatList = flattenImportedServers(data.servers);
-      finalServers = processAndValidate(flatList);
-    }
-
-    config.value = {
-      ...defaultConfig,
-      ...data,
-      servers: finalServers
-    };
-
-    return true; // 表示成功
-  } catch (e: any) {
-    showAlert(e.message, "导入失败");
-    return false; // 表示失败
-  }
-}
-
-/**
- * @description “加载配置”按钮的点击事件处理器。
- */
-async function loadConfig() {
-  if (config.value.servers.length > 0) {
-    const confirmed = await showConfirm(
-      '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
-      '覆盖确认'
-    );
-    if (!confirmed) {
-      return; // 用户取消操作
-    }
+  } catch (e) {
+    showAlert(e instanceof Error ? e.message : String(e), '导入失败');
+    return false;
   }
 
-  const success = parseAndSetConfig(jsonInput.value);
-  if (success) {
-    showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
-  }
-}
-
-/**
- * @description (v14) 拖拽结束后，重建 `config.value.servers`。
- */
-function flattenTreeAndSync() {
-  const newFlatList: Server[] = []
-  let priorityCounter = 0
-
-  function traverse(nodes: Server[], parentIp = "") {
-    if (!nodes) return
-
-    nodes.forEach((server) => {
-      server.parent_ip = parentIp
-
-      if (parentIp) {
-        server.server_type = 'child'
-      } else if (server.children && server.children.length > 0) {
-        server.server_type = 'parent'
-      } else {
-        server.server_type = 'standalone'
+  /**
+   * @description “加载配置”按钮的点击事件处理器。
+   */
+  async function loadConfig() {
+    if (config.value.servers.length > 0) {
+      const confirmed = await showConfirm(
+        '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
+        '覆盖确认'
+      );
+      if (!confirmed) {
+        return; // 用户取消操作
       }
+    }
 
-      server.priority = (priorityCounter + 1) * 10
-      priorityCounter++
+    const success = parseAndSetConfig(jsonInput.value);
+    if (success) {
+      showToast(`配置已成功加载！共导入 ${config.value.servers.length} 个服务器。`);
+    }
+  }
 
-      const { children, ...flatServer } = server
-      newFlatList.push(flatServer as Server)
+  /**
+   * @description (v14) 拖拽结束后，重建 `config.value.servers`。
+   */
+  function flattenTreeAndSync() {
+    const newFlatList: Server[] = []
+    let priorityCounter = 0
 
-      if (children) {
-        traverse(children, server.ip)
-      }
+    function traverse(nodes: Server[], parentIp = "") {
+      if (!nodes) return
+
+      nodes.forEach((server) => {
+        server.parent_ip = parentIp
+
+        if (parentIp) {
+          server.server_type = 'child'
+        } else if (server.children && server.children.length > 0) {
+          server.server_type = 'parent'
+        } else {
+          server.server_type = 'standalone'
+        }
+
+        server.priority = (priorityCounter + 1) * 10
+        priorityCounter++
+
+        const { children, ...flatServer } = server
+        newFlatList.push(flatServer as Server)
+
+        if (children) {
+          traverse(children, server.ip)
+        }
+      })
+    }
+
+    traverse(serverTree.value, "")
+
+    // 临时禁用 watch，更新，然后再启用
+    stopWatch()
+    config.value.servers = newFlatList
+    nextTick(() => {
+      startWatch()
     })
   }
 
-  traverse(serverTree.value, "")
+  /**
+   * @description (v15) 拖拽规则。
+   */
+  function checkMove(moveEvent: any): boolean {
+    const draggedEl = moveEvent.draggedContext.element as Server
+    const toEl = moveEvent.to as HTMLElement
 
-  // 临时禁用 watch，更新，然后再启用
-  stopWatch()
-  config.value.servers = newFlatList
-  nextTick(() => {
-    startWatch()
-  })
-}
+    // 检查被拖拽的元素是否是一个 "父服" (有子节点)
+    if (
+      draggedEl &&
+      draggedEl.children &&
+      draggedEl.children.length > 0
+    ) {
+      // 检查目标列表是否是一个 "子列表"
+      if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
+        // 阻止移动 (父服不能成为子服)
+        return false
+      }
+    }
+    return true
+  }
 
-/**
- * @description (v15) 拖拽规则。
- */
-function checkMove(moveEvent: any): boolean {
-  const draggedEl = moveEvent.draggedContext.element as Server
-  const toEl = moveEvent.to as HTMLElement
+  // --- (E) 弹窗内的表单逻辑 (颜色与预设) ---
 
-  // 检查被拖拽的元素是否是一个 "父服" (有子节点)
-  if (
-    draggedEl &&
-    draggedEl.children &&
-    draggedEl.children.length > 0
-  ) {
-    // 检查目标列表是否是一个 "子列表"
-    if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
-      // 阻止移动 (父服不能成为子服)
-      return false
+  function updateColorFromPicker(server: Server) {
+    server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
+  }
+
+  function applyPreset(server: Server) {
+    const presetKey = server.selectedPreset
+    if (!presetKey || !presets[presetKey]) return
+
+    const preset = presets[presetKey]
+    if (preset) {
+      server.tag = preset.tag
+      server.tag_color_with_hash = preset.tag_color_with_hash
+      updateColorFromPicker(server)
     }
   }
-  return true
-}
 
-// --- (E) 弹窗内的表单逻辑 (颜色与预设) ---
+  function checkIfCustom(server: Server) {
+    if (!server.selectedPreset || !presets[server.selectedPreset]) return
+    const preset = presets[server.selectedPreset]
 
-function updateColorFromPicker(server: Server) {
-  server.tag_color = server.tag_color_with_hash.substring(1).toUpperCase()
-}
+    if (preset && (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash)) {
+      server.selectedPreset = ""
+    }
+  }
 
-function applyPreset(server: Server) {
-  const presetKey = server.selectedPreset
-  if (!presetKey || !presets[presetKey]) return
-
-  const preset = presets[presetKey]
-  if (preset) {
-    server.tag = preset.tag
-    server.tag_color_with_hash = preset.tag_color_with_hash
+  function onColorInput(server: Server) {
     updateColorFromPicker(server)
-  }
-}
-
-function checkIfCustom(server: Server) {
-  if (!server.selectedPreset || !presets[server.selectedPreset]) return
-  const preset = presets[server.selectedPreset]
-
-  if (preset && (server.tag !== preset.tag || server.tag_color_with_hash !== preset.tag_color_with_hash)) {
-    server.selectedPreset = ""
-  }
-}
-
-function onColorInput(server: Server) {
-  updateColorFromPicker(server)
-  checkIfCustom(server)
-}
-
-// --- (F) 服务器增删 (根级别) ---
-
-/**
- * @description “+ 添加服务器”按钮 (v16)
- */
-const addServer = () => openServerModal(null, null)
-
-/**
- * @description “+ 子服”按钮 (v16)
- */
-const addChildServer = (parent: Server) => openServerModal(null, parent)
-
-/**
- * @description 删除一个服务器（及其所有子服务器）。
- */
-async function removeServer(server: Server) {
-  const serverToRemove = server
-
-  let confirmed = false
-  if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
-    const childCount = config.value.servers.filter(s => s.parent_ip === serverToRemove.ip).length
-    const message = `确定要删除服务器 ${serverToRemove.ip} 吗？${childCount > 0 ? `\n(其 ${childCount} 个子服务器将一并删除)` : ''}`
-    confirmed = await showConfirm(message, '删除确认');
-  } else {
-    confirmed = await showConfirm(`确定要删除服务器 ${serverToRemove.ip} 吗？`, '删除确认');
+    checkIfCustom(server)
   }
 
-  if (confirmed) {
+  // --- (F) 服务器增删 (根级别) ---
+
+  /**
+   * @description “+ 添加服务器”按钮 (v16)
+   */
+  const addServer = () => openServerModal(null, null)
+
+  /**
+   * @description “+ 子服”按钮 (v16)
+   */
+  const addChildServer = (parent: Server) => openServerModal(null, parent)
+
+  /**
+   * @description 删除一个服务器（及其所有子服务器）。
+   */
+  async function removeServer(server: Server) {
+    const serverToRemove = server
+
+    let confirmed = false
     if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
-      // 删除父服及其所有子服
-      const parentIp = serverToRemove.ip
-      config.value.servers = config.value.servers.filter(s => {
-        return s.ip !== serverToRemove.ip && s.parent_ip !== parentIp
-      })
+      const childCount = config.value.servers.filter(s => s.parent_ip === serverToRemove.ip).length
+      const message = `确定要删除服务器 ${serverToRemove.ip} 吗？${childCount > 0 ? `\n(其 ${childCount} 个子服务器将一并删除)` : ''}`
+      confirmed = await showConfirm(message, '删除确认');
     } else {
-      // 只删除一个子服
-      const index = config.value.servers.findIndex(s => s.ip === serverToRemove.ip);
-      if (index > -1) {
-        config.value.servers.splice(index, 1)
+      confirmed = await showConfirm(`确定要删除服务器 ${serverToRemove.ip} 吗？`, '删除确认');
+    }
+
+    if (confirmed) {
+      if (serverToRemove.server_type === 'parent' || serverToRemove.server_type === 'standalone') {
+        // 删除父服及其所有子服
+        const parentIp = serverToRemove.ip
+        config.value.servers = config.value.servers.filter(s => {
+          return s.ip !== serverToRemove.ip && s.parent_ip !== parentIp
+        })
+      } else {
+        // 只删除一个子服
+        const index = config.value.servers.findIndex(s => s.ip === serverToRemove.ip);
+        if (index > -1) {
+          config.value.servers.splice(index, 1)
+        }
       }
     }
   }
-}
 
-/**
- * @description (v16 建议 4) 全局删除所有服务器
- */
-async function removeAllServers() {
-  const confirmed = await showConfirm(
-    `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
-    '删除全部确认'
-  );
-  if (confirmed) {
-    config.value.servers = [];
-    // (可选) 也可以重置页脚
-    // config.value.footer = "";
+  /**
+   * @description (v16 建议 4) 全局删除所有服务器
+   */
+  async function removeAllServers() {
+    const confirmed = await showConfirm(
+      `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
+      '删除全部确认'
+    );
+    if (confirmed) {
+      config.value.servers = [];
+      // (可选) 也可以重置页脚
+      // config.value.footer = "";
+    }
   }
-}
 
-// --- (G) 导入/导出 (IO) 操作 ---
+  // --- (G) 导入/导出 (IO) 操作 ---
 
-function copyToClipboard() {
-  navigator.clipboard.writeText(outputJson.value).then(() => {
-    showToast('已复制到剪贴板！')
-  }, () => {
-    showAlert('复制失败！请检查浏览器权限。', '复制失败')
-  })
-}
+  function copyToClipboard() {
+    const url = new URL(window.location.href);
+    url.search = `?data=${compressedOutput.value}`;
 
-// --- (H) v14 核心重构：双向同步 Watch ---
-//
-const stopWatch = watch(
-  () => config.value.servers,
-  (newFlatList) => {
-    serverTree.value = buildTree(newFlatList)
-  },
-  {
-    deep: true,
-    immediate: true
+    navigator.clipboard.writeText(url.toString()).then(() => {
+      showToast('分享链接已复制到剪贴板！');
+    }, () => {
+      showAlert('复制失败！请检查浏览器权限。', '复制失败');
+    });
   }
-)
 
-const startWatch = () => {
-  stopWatch() // 确保旧的已停止
-  watch(
+  // --- (H) v14 核心重构：双向同步 Watch ---
+  //
+  const stopWatch = watch(
     () => config.value.servers,
     (newFlatList) => {
       serverTree.value = buildTree(newFlatList)
     },
-    { deep: true, immediate: true }
-  )
-}
-// --- 7. 初始化 ---
-
-// (v16 建议 5) 组件加载时，尝试从剪贴板自动导入
-onMounted(async () => {
-  try {
-    // 1. 尝试读取剪贴板
-    const text = await navigator.clipboard.readText();
-    if (!text) return; // 剪贴板为空
-
-    // 2. 尝试解析为 JSON
-    const data = JSON.parse(text);
-
-    // 3. 验证是否为我们的配置格式 (必须有 servers 数组 和/或 footer)
-    if (data && (Array.isArray(data.servers) || data.hasOwnProperty('footer'))) {
-      jsonInput.value = text; // 填充到导入框
-      parseAndSetConfig(text); // 自动导入
-      // (v16 建议 5) 保持为空，但提示用户
-      // showAlert('已从剪贴板自动导入配置。', '导入成功');
+    {
+      deep: true,
+      immediate: true
     }
-  } catch (e: any) {
-    // 失败 (权限被拒、剪贴板不是 JSON、JSON 格式不对等)
-    // 在控制台打印错误，但不要打扰用户
-    console.warn('Failed to auto-import from clipboard:', e.message);
-  }
+  )
 
-  // (v16 建议 5) 确保初始列表为空 (而不是依赖 defaultJsonString)
-  if (config.value.servers.length === 0 && !config.value.footer) { // (v17.34) 检查是否真的为空
-    parseAndSetConfig(`{}`); // (v17.34) 解析空对象以触发默认值填充
+  const startWatch = () => {
+    stopWatch() // 确保旧的已停止
+    watch(
+      () => config.value.servers,
+      (newFlatList) => {
+        serverTree.value = buildTree(newFlatList)
+      },
+      { deep: true, immediate: true }
+    )
   }
-  const savedTheme = localStorage.getItem('theme')
-  if (savedTheme) {
-    // 1. 优先使用本地存储的设置
-    applyTheme(savedTheme === 'dark')
-  } else {
-    // 2. 否则，跟随操作系统的偏好
-    const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
-    applyTheme(prefersDark)
-  }
-  document.addEventListener('keydown', handleGlobalKeydown);
-});
+  // --- 7. 初始化 ---
 
-onBeforeUnmount(() => {
-  document.removeEventListener('keydown', handleGlobalKeydown);
-  document.removeEventListener('mousedown', handleClickOutsideParentSelect);
-  document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
-});
+  // (v16 建议 5) 组件加载时，尝试从剪贴板自动导入
+  onMounted(async () => {
+    // (优化) 优先从 URL 参数导入
+    const urlParams = new URLSearchParams(window.location.search);
+    const dataFromUrl = urlParams.get('data');
+
+    if (dataFromUrl) {
+      const decompressedConfig = decompressConfig(dataFromUrl);
+      if (decompressedConfig) {
+        const success = parseAndSetConfig(decompressedConfig);
+        if (success) {
+          showToast('已从 URL 成功导入配置！');
+          // 清理 URL，避免刷新时重复导入
+          window.history.replaceState({}, document.title, window.location.pathname);
+        } else {
+          showAlert('从 URL 导入配置失败，数据可能已损坏。', '导入失败');
+        }
+      } else {
+        showAlert('无法解压来自 URL 的数据，链接可能不完整或已损坏。', '导入失败');
+      }
+      return; // 处理完 URL 后即返回，不再处理剪贴板
+    }
+
+    // 如果 URL 中没有数据，再尝试从剪贴板导入
+    try {
+      const text = await navigator.clipboard.readText();
+      if (!text) return; // 剪贴板为空
+
+      const data = JSON.parse(text);
+
+      if (data && (Array.isArray(data.servers) || data.hasOwnProperty('footer'))) {
+        jsonInput.value = text;
+        parseAndSetConfig(text);
+        showToast('已从剪贴板自动导入配置。');
+      }
+    } catch (e: any) {
+      console.warn('Failed to auto-import from clipboard:', e.message);
+    }
+
+    if (config.value.servers.length === 0 && !config.value.footer) {
+      parseAndSetConfig(`{}`);
+    }
+
+    const savedTheme = localStorage.getItem('theme')
+    if (savedTheme) {
+      applyTheme(savedTheme === 'dark')
+    } else {
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      applyTheme(prefersDark)
+    }
+    document.addEventListener('keydown', handleGlobalKeydown);
+  });
+
+  onBeforeUnmount(() => {
+    document.removeEventListener('keydown', handleGlobalKeydown);
+    document.removeEventListener('mousedown', handleClickOutsideParentSelect);
+    document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
+  });
 
 // (v16 建议 5) 移除末尾的 parseAndSetConfig(defaultJsonString)
 
@@ -1325,12 +1485,12 @@ onBeforeUnmount(() => {
 
         <div class="form-section">
           <h3 class="io-header">2. 导出 (Export)</h3>
-          <p>复制下面的内容，用于机器人 `/mcs import` 命令：</p>
+          <p>复制下面的压缩字符串，可通过 URL 分享：</p>
           <div class="form-group">
-            <textarea :value="outputJson" rows="15" readonly></textarea>
+            <textarea :value="compressedOutput" rows="8" readonly></textarea>
           </div>
           <button @click="copyToClipboard" class="btn btn-secondary">
-            <font-awesome-icon :icon="faClipboard" /> 复制到剪贴板
+            <font-awesome-icon :icon="faClipboard" /> 复制分享链接
           </button>
         </div>
       </div>
@@ -2861,17 +3021,18 @@ textarea {
 
 /* 内部小标签 (用于触发器和选项) */
 .simple-tag-small {
-    font-size: 0.8rem;
-    font-weight: 500;
-    padding: 2px 6px;
-    border-radius: 4px;
-    flex-shrink: 0;
+  font-size: 0.8rem;
+  font-weight: 500;
+  padding: 2px 6px;
+  border-radius: 4px;
+  flex-shrink: 0;
 }
 
 /* (优化) Toast 小提示样式 */
 .toast-notification {
   position: fixed;
-  top: 80px; /* 调整位置，使其更显眼 */
+  top: 80px;
+  /* 调整位置，使其更显眼 */
   left: 50%;
   transform: translateX(-50%);
   background-color: var(--color-success);
