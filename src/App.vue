@@ -1028,6 +1028,36 @@ function downloadJson() {
   URL.revokeObjectURL(url);
 }
 
+const sampleConfigJson = `{
+  "footer": "欢迎加入Minecraft交流群！",
+  "show_offline_by_default": false,
+  "servers": [
+    { "ip": "lobby.example.com", "comment": "主大厅", "tag": "大厅", "tag_color": "3498DB", "ignore_in_list": false, "children": [] },
+    { "ip": "survival.example.com", "comment": "生存世界", "tag": "生存", "tag_color": "2ECC71", "ignore_in_list": false, "children": [
+      { "ip": "survival-res.example.com", "comment": "资源区", "tag": "生存", "tag_color": "2ECC71", "ignore_in_list": false, "children": [] },
+      { "ip": "survival-pvp.example.com", "comment": "PVP区", "tag": "PVP", "tag_color": "E74C3C", "ignore_in_list": true, "children": [] }
+    ]},
+    { "ip": "creative.example.com", "comment": "创造服", "tag": "创造", "tag_color": "F1C40F", "ignore_in_list": false, "children": [] },
+    { "ip": "modded.example.com", "comment": "模组服", "tag": "模组", "tag_color": "E67E22", "ignore_in_list": false, "children": [] },
+    { "ip": "recreation.example.com", "comment": "高校复原", "tag": "复原", "tag_color": "9B59B6", "ignore_in_list": false, "children": [] }
+  ]
+}`;
+async function loadSampleConfig() {
+  if (config.value.servers.length > 0) {
+    const confirmed = await showConfirm(
+      '加载示例将会覆盖您当前的配置，确定要继续吗？',
+      '加载示例确认'
+    );
+    if (!confirmed) {
+      return;
+    }
+  }
+  const success = parseAndSetConfig(sampleConfigJson);
+  if (success) {
+    showToast('示例配置已成功加载！');
+  }
+}
+
 /**
  * @description “加载配置”按钮的点击事件处理器。
  * 支持从 URL、JSON 文本、/mcs import 命令或裸压缩字符串加载。
@@ -1611,6 +1641,9 @@ onBeforeUnmount(() => {
             <button @click="loadConfig" class="btn btn-primary">
               <font-awesome-icon :icon="faUpload" /> 加载配置
             </button>
+            <button @click="loadSampleConfig" class="btn btn-secondary" style="margin-left: 10px;">
+              <font-awesome-icon :icon="faPlusCircle" /> 加载示例
+            </button>
           </div>
         </div>
 
@@ -1688,6 +1721,7 @@ onBeforeUnmount(() => {
                 <div class="form-group grow">
                   <label>服务器名称 (Server Name) (可选)</label>
                   <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)" />
+                  <p class="form-help-text" style="margin-top: 5px;">此名称将作为服务器离线时的默认标题。</p>
                 </div>
               </div>
 
