@@ -15,7 +15,8 @@ import {
   faTrash,
   faUpload,
   faClipboard,
-  faSpinner
+  faSpinner,
+  faChevronDown
 } from '@fortawesome/free-solid-svg-icons'
 import { ColorPicker } from 'vue3-colorpicker'
 import 'vue3-colorpicker/style.css'
@@ -1239,7 +1240,7 @@ function sanitizeIpForId(ip: string | undefined): string {
   return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-  // --- 9. 初始化与生命周期 ---
+// --- 9. 初始化与生命周期 ---
 
 // 深度监听配置变化，并自动保存到 localStorage
 watch(config, (newConfig) => {
@@ -1448,6 +1449,7 @@ onBeforeUnmount(() => {
           <font-awesome-icon v-else :icon="faMoon" />
         </button>
         <h1>服务器配置编辑器</h1>
+        <p class="form-help-text" style="margin-top: 15px; text-align: center;">内容将自动保存到浏览器，方便下次继续编辑。</p>
 
       </header>
 
@@ -1597,9 +1599,10 @@ onBeforeUnmount(() => {
         <div class="form-section">
           <div class="accordion-header" @click="toggleImportAccordion">
             <h3 class="io-header">1. 导入 (Import)</h3>
-            <span v-if="isMobileView" class="accordion-icon">{{ isImportCollapsed ? '▼' : '▲' }}</span>
+            <font-awesome-icon v-if="isMobileView" :icon="faChevronDown" class="accordion-icon"
+              :class="{ 'is-rotated': !isImportCollapsed && isMobileView }" />
           </div>
-          <div v-show="!isImportCollapsed || !isMobileView">
+          <div class="accordion-content" :class="{ 'is-collapsed': isImportCollapsed && isMobileView }">
             <p>粘贴分享链接，或机器人导出的数据（如/mcs import命令、JSON等）：</p>
             <div class="form-group">
               <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或机器人导出的数据..."></textarea>
@@ -1613,9 +1616,10 @@ onBeforeUnmount(() => {
         <div class="form-section">
           <div class="accordion-header" @click="toggleExportAccordion">
             <h3 class="io-header">2. 导出 (Export)</h3>
-            <span v-if="isMobileView" class="accordion-icon">{{ isExportCollapsed ? '▼' : '▲' }}</span>
+            <font-awesome-icon v-if="isMobileView" :icon="faChevronDown" class="accordion-icon"
+              :class="{ 'is-rotated': !isExportCollapsed && isMobileView }" />
           </div>
-          <div v-show="!isExportCollapsed || !isMobileView">
+          <div class="accordion-content" :class="{ 'is-collapsed': isExportCollapsed && isMobileView }">
             <p>复制生成的命令，并将其发送到QQ群聊中：</p>
             <div class="form-group">
               <textarea :value="importCommand" rows="8" readonly></textarea>
@@ -1951,8 +1955,22 @@ html.dark-mode {
 
   .accordion-icon {
     font-size: 1.2rem;
-    font-weight: bold;
-    transition: transform 0.2s ease;
+    transition: transform 0.35s ease;
+  }
+
+  .accordion-icon.is-rotated {
+    transform: rotate(180deg);
+  }
+
+  .accordion-content {
+    overflow: hidden;
+    transition: max-height 0.35s ease-in-out;
+    max-height: 500px;
+    /* 设定一个足够大的最大高度以容纳内容 */
+  }
+
+  .accordion-content.is-collapsed {
+    max-height: 0;
   }
 }
 
