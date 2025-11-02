@@ -1204,7 +1204,22 @@ function sanitizeIpForId(ip: string | undefined): string {
   return ip.replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-// --- 8. 核心数据同步 ---
+  // --- 9. 初始化与生命周期 ---
+
+// 深度监听配置变化，并自动保存到 localStorage
+watch(config, (newConfig) => {
+  // 使用 nextTick 确保在所有计算属性（如 outputJson）都更新完毕后才执行保存
+  // 这可以避免在加载数据时，因数据更新顺序问题而将旧的或空的状态保存回去
+  nextTick(() => {
+    try {
+      const jsonString = JSON.stringify(outputJson.value);
+      localStorage.setItem('mcs-editor-config', jsonString);
+    } catch (e) {
+      console.error("自动保存到 localStorage 失败:", e);
+    }
+  });
+}, { deep: true });
+
 
 /**
  * @description 将扁平的服务器列表（`config.servers`）转换为嵌套的树形结构，用于 UI 渲染。
@@ -1333,7 +1348,26 @@ onMounted(async () => {
     } else {
       showAlert('无法解压来自 URL 的数据，链接可能不完整或已损坏。', '导入失败');
     }
-    return; // 处理完 URL 后即返回，不再处理剪贴板
+    return; // 处理完 URL 后即返回，不再处理后续的自动加载
+  }
+
+  // 如果 URL 中没有数据，则尝试从 localStorage 恢复
+  try {
+    const savedConfig = localStorage.getItem('mcs-editor-config');
+    if (savedConfig) {
+      const success = parseAndSetConfig(savedConfig);
+      if (success) {
+        // 仅当恢复的数据不为空时才显示提示
+        const hasServers = config.value.servers && config.value.servers.length > 0;
+        const hasFooter = config.value.footer && config.value.footer.trim() !== '';
+        if (hasServers || hasFooter) {
+          showToast('已从浏览器恢复上次的编辑内容。');
+        }
+      }
+    }
+  } catch (e) {
+    console.error("从 localStorage 加载配置失败:", e);
+    localStorage.removeItem('mcs-editor-config'); // 清理可能已损坏的数据
   }
 
   // 如果 URL 中没有数据，再尝试从剪贴板自动导入
@@ -1403,6 +1437,7 @@ onBeforeUnmount(() => {
               页脚文本 (Footer)
             </label>
             <input id="global-footer" type="text" v-model="config.footer" placeholder="输入页脚文本" />
+            <p class="form-help-text" style="margin-top: 5px;">内容将自动保存到浏览器，方便下次继续编辑。</p>
           </div>
 
           <div class="form-group-toggle">
