@@ -1390,7 +1390,7 @@ onBeforeUnmount(() => {
           <font-awesome-icon v-else :icon="faMoon" />
         </button>
         <h1>服务器配置编辑器</h1>
-        <div class="subtitle">拖拽服务器卡片调整优先级</div>
+
       </header>
 
       <div class="panel-body">
@@ -1423,6 +1423,10 @@ onBeforeUnmount(() => {
         <div class="form-section server-list-section">
           <div class="server-list-header">
             <h3>服务器列表</h3>
+            <div class="drag-help-text">
+              <p>• 拖拽服务器卡片可调整优先级。</p>
+              <p>• 将一个服务器拖拽到另一个之上可创建子服务器。</p>
+            </div>
             <div class="header-actions">
               <button @click="removeAllServers" class="btn btn-danger" v-if="config.servers.length > 0">
                 <font-awesome-icon :icon="faTrash" /> 全部删除
@@ -1905,6 +1909,12 @@ body {
   margin: 0 auto;
 }
 
+@media (max-width: 1024px) {
+  .layout-container {
+    grid-template-columns: 1fr;
+  }
+}
+
 .panel {
   background: var(--color-surface);
   border-radius: 16px;
@@ -2141,6 +2151,28 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  margin-bottom: 15px;
+  flex-wrap: wrap;
+}
+
+.drag-help-text {
+  flex-basis: 100%;
+  order: 2;
+  margin-top: -5px;
+  margin-bottom: 10px;
+  color: var(--color-text-secondary);
+  font-size: 0.9rem;
+  text-align: left;
+}
+
+.drag-help-text p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+.drag-help-text p {
+  margin: 0;
+  line-height: 1.4;
 }
 
 .header-actions {
