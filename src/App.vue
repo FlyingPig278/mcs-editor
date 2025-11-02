@@ -148,7 +148,8 @@ function decompressConfig(encodedString: string): AppConfig | null {
       servers: servers
     };
   } catch (e) {
-    console.error("解压失败:", e);
+    // 当输入的是普通 JSON 而不是压缩字符串时，解压失败是预期行为，无需在控制台报告错误。
+    // 函数返回 null，调用者会继续尝试将其作为 JSON 解析。
     return null;
   }
 }
@@ -1370,21 +1371,7 @@ onMounted(async () => {
     localStorage.removeItem('mcs-editor-config'); // 清理可能已损坏的数据
   }
 
-  // 如果 URL 中没有数据，再尝试从剪贴板自动导入
-  try {
-    const text = await navigator.clipboard.readText();
-    if (!text) return;
 
-    const data = JSON.parse(text);
-
-    if (data && (Array.isArray(data.servers) || data.hasOwnProperty('footer'))) {
-      jsonInput.value = text;
-      parseAndSetConfig(text);
-      showToast('已从剪贴板自动导入配置。');
-    }
-  } catch (e: any) {
-    console.warn('从剪贴板自动导入失败:', e.message);
-  }
 
   // 初始化时加载一个空配置
   if (config.value.servers.length === 0 && !config.value.footer) {
