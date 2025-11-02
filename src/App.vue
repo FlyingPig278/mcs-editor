@@ -470,6 +470,40 @@ const selectedPresetObject = computed<{ tag: string; tag_color_with_hash: string
 
 const isAddMode = computed(() => modalMode.value === MODAL_MODE.ADD);
 
+// --- (G) 响应式布局与手风琴效果 ---
+const isMobileView = ref(false);
+const isImportCollapsed = ref(false);
+const isExportCollapsed = ref(false);
+
+function toggleImportAccordion() {
+  if (isMobileView.value) {
+    isImportCollapsed.value = !isImportCollapsed.value;
+  }
+}
+
+function toggleExportAccordion() {
+  if (isMobileView.value) {
+    isExportCollapsed.value = !isExportCollapsed.value;
+  }
+}
+
+function handleResize() {
+  const isMobileNow = window.innerWidth <= 1024;
+  if (isMobileView.value !== isMobileNow) {
+    isMobileView.value = isMobileNow;
+    if (isMobileNow) {
+      // 进入移动视图，设置默认折叠状态
+      isImportCollapsed.value = true;
+      isExportCollapsed.value = false;
+    } else {
+      // 进入桌面视图，全部展开
+      isImportCollapsed.value = false;
+      isExportCollapsed.value = false;
+    }
+  }
+}
+
+
 // --- 7. 方法 (Methods) ---
 
 // --- (A) 通用 Alert/Confirm 弹窗方法 ---
@@ -1389,11 +1423,14 @@ onMounted(async () => {
 
   // 添加全局事件监听
   document.addEventListener('keydown', handleGlobalKeydown);
+  window.addEventListener('resize', handleResize);
+  handleResize(); // 初始加载时执行一次
 });
 
 onBeforeUnmount(() => {
   // 移除全局事件监听，防止内存泄漏
   document.removeEventListener('keydown', handleGlobalKeydown);
+  window.removeEventListener('resize', handleResize);
   document.removeEventListener('mousedown', handleClickOutsideParentSelect);
   document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
 });
@@ -1558,28 +1595,38 @@ onBeforeUnmount(() => {
     <div class="panel io-panel">
       <div class="panel-body">
         <div class="form-section">
-          <h3 class="io-header">1. 导入 (Import)</h3>
-          <p>粘贴分享链接，或机器人导出的数据（如/mcs import命令、JSON等）：</p>
-          <div class="form-group">
-            <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或机器人导出的数据..."></textarea>
+          <div class="accordion-header" @click="toggleImportAccordion">
+            <h3 class="io-header">1. 导入 (Import)</h3>
+            <span v-if="isMobileView" class="accordion-icon">{{ isImportCollapsed ? '▼' : '▲' }}</span>
           </div>
-          <button @click="loadConfig" class="btn btn-primary">
-            <font-awesome-icon :icon="faUpload" /> 加载配置
-          </button>
+          <div v-show="!isImportCollapsed || !isMobileView">
+            <p>粘贴分享链接，或机器人导出的数据（如/mcs import命令、JSON等）：</p>
+            <div class="form-group">
+              <textarea v-model="jsonInput" rows="8" placeholder="在此粘贴分享链接或机器人导出的数据..."></textarea>
+            </div>
+            <button @click="loadConfig" class="btn btn-primary">
+              <font-awesome-icon :icon="faUpload" /> 加载配置
+            </button>
+          </div>
         </div>
 
         <div class="form-section">
-          <h3 class="io-header">2. 导出 (Export)</h3>
-          <p>复制生成的命令，并将其发送到QQ群聊中：</p>
-          <div class="form-group">
-            <textarea :value="importCommand" rows="8" readonly></textarea>
+          <div class="accordion-header" @click="toggleExportAccordion">
+            <h3 class="io-header">2. 导出 (Export)</h3>
+            <span v-if="isMobileView" class="accordion-icon">{{ isExportCollapsed ? '▼' : '▲' }}</span>
           </div>
-          <button @click="copyImportCommand" class="btn btn-secondary">
-            <font-awesome-icon :icon="faClipboard" /> 复制导入命令
-          </button>
-          <button @click="downloadJson" class="btn btn-primary" style="margin-left: 10px;">
-            <font-awesome-icon :icon="faSave" /> 导出JSON
-          </button>
+          <div v-show="!isExportCollapsed || !isMobileView">
+            <p>复制生成的命令，并将其发送到QQ群聊中：</p>
+            <div class="form-group">
+              <textarea :value="importCommand" rows="8" readonly></textarea>
+            </div>
+            <button @click="copyImportCommand" class="btn btn-secondary">
+              <font-awesome-icon :icon="faClipboard" /> 复制导入命令
+            </button>
+            <button @click="downloadJson" class="btn btn-primary" style="margin-left: 10px;">
+              <font-awesome-icon :icon="faSave" /> 导出JSON
+            </button>
+          </div>
         </div>
       </div>
     </div>
@@ -1884,6 +1931,29 @@ html.dark-mode {
   --color-focus-outline: rgba(129, 140, 248, 0.55);
   --shadow-soft: 0 10px 20px rgba(0, 0, 0, 0.2);
   --shadow-hover: 0 16px 40px rgba(0, 0, 0, 0.25);
+}
+
+/* --- 手风琴样式 (仅移动端) --- */
+@media (max-width: 1024px) {
+  .accordion-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    cursor: pointer;
+    padding: 10px 0;
+    margin-bottom: 10px;
+    border-bottom: 1px solid var(--color-border);
+  }
+
+  .accordion-header .io-header {
+    margin-bottom: 0;
+  }
+
+  .accordion-icon {
+    font-size: 1.2rem;
+    font-weight: bold;
+    transition: transform 0.2s ease;
+  }
 }
 
 /* 为颜色变化添加过渡动画 */
