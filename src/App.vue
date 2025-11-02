@@ -1463,7 +1463,6 @@ onBeforeUnmount(() => {
               页脚文本 (Footer)
             </label>
             <input id="global-footer" type="text" v-model="config.footer" placeholder="输入页脚文本" />
-            <p class="form-help-text" style="margin-top: 5px;">内容将自动保存到浏览器，方便下次继续编辑。</p>
           </div>
 
           <div class="form-group-toggle">
