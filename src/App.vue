@@ -1523,7 +1523,8 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="simple-info-line">
                       <span class="simple-ip" :class="{ 'with-comment': server.comment }">
-                        {{ server.comment ? '(' + server.ip + ')' : server.ip }}
+                        <template v-if="server.comment">{{ server.ip }}</template>
+                        <template v-else>{{ server.ip }}</template>
                       </span>
                       <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                     </div>
@@ -1563,7 +1564,8 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="simple-info-line">
                           <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
-                            {{ childServer.comment ? '(' + childServer.ip + ')' : childServer.ip }}
+                            <template v-if="childServer.comment">{{ childServer.ip }}</template>
+                            <template v-else>{{ childServer.ip }}</template>
                           </span>
                           <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                         </div>
@@ -1684,7 +1686,7 @@ onBeforeUnmount(() => {
 
               <div class="form-row">
                 <div class="form-group grow">
-                  <label>注释 (Comment) (可选)</label>
+                  <label>服务器名称 (Server Name) (可选)</label>
                   <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)" />
                 </div>
               </div>
@@ -1830,7 +1832,7 @@ onBeforeUnmount(() => {
                           }">{{ parent.tag }}</span>
 
                           <span class="option-text">
-                            <template v-if="parent.comment">{{ parent.comment }} ({{ parent.ip }})</template>
+                            <template v-if="parent.comment">{{ parent.comment }} (IP: {{ parent.ip }})</template>
                             <template v-else>{{ parent.ip }}</template>
                           </span>
                         </li>
