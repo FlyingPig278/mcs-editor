@@ -36,3 +36,5 @@ coverage
 __screenshots__/
 changes.diff
 dist.zip
+.vercel
+deploy.ps1
