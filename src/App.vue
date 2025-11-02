@@ -1479,7 +1479,7 @@ onBeforeUnmount(() => {
           <font-awesome-icon v-else :icon="faMoon" />
         </button>
         <h1>服务器配置编辑器</h1>
-        <p class="form-help-text" style="margin-top: 15px; text-align: center;">内容将自动保存到浏览器，方便下次继续编辑。</p>
+        <p class="subtitle">内容将自动保存到浏览器，方便下次继续编辑。</p>
 
       </header>
 
