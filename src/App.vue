@@ -1741,53 +1741,32 @@ onBeforeUnmount(() => {
 
               <div class="form-row">
                 <div class="form-group grow">
-                  <label>服务器名称 (Server Name) (可选)</label>
+                  <label>服务器注释 (Comment)</label>
                   <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)" />
-                  <p class="form-help-text" style="margin-top: 5px;">此名称将作为服务器离线时的默认标题。</p>
+                  <p class="form-help-text" style="margin-top: 5px;">用于后台管理备注，或在服务器离线时作为标题显示。</p>
                 </div>
               </div>
 
+              <!-- IP 隐藏/公开显示名称联动区域 -->
               <div class="form-row">
+                <!-- 隐藏 IP 地址开关 -->
+                <div class="form-group-toggle">
+                  <label class="toggle-switch">
+                    <input type="checkbox" v-model="currentServerData.hide_ip" :id="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
+                    <span class="toggle-switch-slider"></span>
+                  </label>
+                  <label :for="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                         class="toggle-switch-label">
+                    <font-awesome-icon :icon="faEyeSlash" /> 隐藏 IP 地址
+                  </label>
+                </div>
+
+                <!-- 公开显示名称输入框 (与隐藏IP联动) -->
                 <div class="form-group grow">
-                  <label>显示名称 (Display Name)</label>
-                  <input type="text" v-model="currentServerData.display_name" placeholder="当隐藏IP时显示此名称" />
-                  <p class="form-help-text" style="margin-top: 5px;">
-                    仅在勾选“隐藏IP”时生效。
-                  </p>
-                </div>
-              </div>
-
-              <div class="form-row">
-                <div style="padding-top: 10px;">
-                  <div class="form-group-toggle" style="margin-top: 0;">
-                    <label class="toggle-switch">
-                      <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                             :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
-                      <span class="toggle-switch-slider"></span>
-                    </label>
-                    <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                           class="toggle-switch-label">
-                      <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏
-                    </label>
-                  </div>
-                  <p class="form-help-text" style="margin-top: 8px; margin-bottom: 0; padding-left: 5px;">
-                    (勾选后, 该服务器将不会显示在 /mcs 的列表图片中)
-                  </p>
-                </div>
-                <div style="padding-top: 10px;">
-                  <div class="form-group-toggle" style="margin-top: 0;">
-                    <label class="toggle-switch">
-                      <input type="checkbox" v-model="currentServerData.hide_ip" :id="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
-                      <span class="toggle-switch-slider"></span>
-                    </label>
-                    <label :for="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                           class="toggle-switch-label">
-                      <font-awesome-icon :icon="faEyeSlash" /> 隐藏 IP
-                    </label>
-                  </div>
-                  <p class="form-help-text" style="margin-top: 8px; margin-bottom: 0; padding-left: 5px;">
-                    (勾选后, 将使用“显示名称”替代IP地址)
-                  </p>
+                  <label for="display-name-input">公开显示名称 (Public Name)</label>
+                  <input type="text" id="display-name-input" v-model="currentServerData.display_name"
+                         :disabled="!currentServerData.hide_ip"
+                         placeholder="IP隐藏时将显示此文本" />
                 </div>
               </div>
 
