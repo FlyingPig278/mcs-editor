@@ -30,7 +30,9 @@ const S_COMMENT = 1;
 const S_TAG = 2;
 const S_TAG_COLOR = 3;
 const S_IGNORE = 4;
-const S_CHILDREN = 5;
+const S_HIDE_IP = 5;      // 新增
+const S_DISPLAY_NAME = 6; // 新增
+const S_CHILDREN = 7;     // 原来的 S_CHILDREN 索引后移
 
 /**
  * 将服务器对象数组转换为更紧凑的数组格式以进行压缩。
@@ -41,8 +43,8 @@ function jsonToCompactArray(servers: Server[]): any[] {
   if (!servers) return [];
   return servers.map(server => {
     const children = (server.children && server.children.length > 0)
-      ? jsonToCompactArray(server.children)
-      : 0;
+        ? jsonToCompactArray(server.children)
+        : 0;
 
     return [
       server.ip,
@@ -50,6 +52,8 @@ function jsonToCompactArray(servers: Server[]): any[] {
       server.tag || 0,
       server.tag_color || 0,
       server.ignore_in_list ? 1 : 0,
+      server.hide_ip ? 1 : 0,
+      server.display_name || 0,
       children
     ];
   });
@@ -62,9 +66,11 @@ function jsonToCompactArray(servers: Server[]): any[] {
  */
 function compactArrayToJson(compactData: any[]): Server[] {
   return compactData.map(item => {
-    const children = Array.isArray(item[S_CHILDREN])
-      ? compactArrayToJson(item[S_CHILDREN])
-      : [];
+    // 兼容性检查：根据数组长度判断子节点索引
+    const children_index = item.length > S_CHILDREN ? S_CHILDREN : 5;
+    const children = Array.isArray(item[children_index])
+        ? compactArrayToJson(item[children_index])
+        : [];
 
     const server: Server = {
       ip: item[S_IP],
@@ -73,6 +79,8 @@ function compactArrayToJson(compactData: any[]): Server[] {
       tag_color: item[S_TAG_COLOR] || 'FF9800',
       tag_color_with_hash: item[S_TAG_COLOR] ? `#${item[S_TAG_COLOR]}` : '#FF9800',
       ignore_in_list: item[S_IGNORE] === 1,
+      hide_ip: item.length > S_HIDE_IP ? (item[S_HIDE_IP] === 1) : false,
+      display_name: item.length > S_DISPLAY_NAME ? (item[S_DISPLAY_NAME] || '') : '',
       children: children,
       // 以下是需要补全的默认/计算属性
       server_type: 'standalone', // 将在 buildTree 中被修正
@@ -166,6 +174,8 @@ interface Server {
   parent_ip: string;
   selectedPreset: string;
   ignore_in_list: boolean;
+  hide_ip: boolean;
+  display_name: string;
   priority?: number; // 用于拖拽排序，在拖拽结束后生成
   children: Server[]; // 存储子服务器，用于构建UI树形结构
 }
@@ -415,6 +425,8 @@ const outputJson = computed<AppConfig>(() => {
       tag_color: node.tag_color,
       tag_color_with_hash: node.tag_color_with_hash,
       ignore_in_list: node.ignore_in_list,
+      hide_ip: node.hide_ip,       // [新增]
+      display_name: node.display_name, // [新增]
       children: [],
       server_type: node.server_type || 'standalone',
       parent_ip: node.parent_ip || '',
@@ -576,6 +588,8 @@ function createBlankServer(parentServer: Server | null = null): Partial<Server> 
     parent_ip: parentServer ? parentServer.ip : "",
     selectedPreset: "",
     ignore_in_list: false,
+    hide_ip: false,
+    display_name: "",
     children: []
   }
 }
@@ -660,8 +674,8 @@ async function saveServer() {
     // 验证1: 父服务器不能成为子服务器
     if (modalMode.value === MODAL_MODE.EDIT && server.children && server.children.length > 0) {
       showAlert(
-        `服务器 [${server.ip}] 本身是一个父服务器，因此不能被设置为其他服务器的子服务器。`,
-        '保存失败'
+          `服务器 [${server.ip}] 本身是一个父服务器，因此不能被设置为其他服务器的子服务器。`,
+          '保存失败'
       );
       isSaving.value = false;
       return;
@@ -669,8 +683,8 @@ async function saveServer() {
     // 验证2: 防止循环依赖
     if (checkForCircularDependency(editingServerIp.value || newIp, server.parent_ip)) {
       showAlert(
-        `无法将服务器 [${server.parent_ip}] 设置为父服务器，因为这会创建一个循环依赖关系。`,
-        '保存失败'
+          `无法将服务器 [${server.parent_ip}] 设置为父服务器，因为这会创建一个循环依赖关系。`,
+          '保存失败'
       );
       isSaving.value = false;
       return;
@@ -770,8 +784,8 @@ async function removeServer(server: Server) {
  */
 async function removeAllServers() {
   const confirmed = await showConfirm(
-    `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
-    '删除全部确认'
+      `您确定要删除所有 ${config.value.servers.length} 个服务器吗？\n此操作不可撤销。`,
+      '删除全部确认'
   );
   if (confirmed) {
     config.value.servers = [];
@@ -797,9 +811,9 @@ function checkMove(moveEvent: any): boolean {
 
   // --- 2. 禁止将父服务器拖拽进子列表 ---
   if (
-    draggedEl &&
-    draggedEl.children &&
-    draggedEl.children.length > 0
+      draggedEl &&
+      draggedEl.children &&
+      draggedEl.children.length > 0
   ) {
     if (toEl && toEl.classList && toEl.classList.contains('child-list')) {
       return false
@@ -880,8 +894,8 @@ function handleParentSelectKeydown(event: KeyboardEvent) {
     event.preventDefault();
     if (activeParentIndex.value >= 0) {
       const selectedIp = activeParentIndex.value === 0
-        ? ''
-        : (potentialParentServers.value[activeParentIndex.value - 1]?.ip ?? '');
+          ? ''
+          : (potentialParentServers.value[activeParentIndex.value - 1]?.ip ?? '');
       if (selectedIp !== editingServerIp.value) {
         selectParent(selectedIp);
       }
@@ -901,7 +915,7 @@ function selectParent(parentIp: string) {
     currentServerData.value.parent_ip = parentIp
   }
   isParentSelectOpen.value = false
-    ; (parentSelectTriggerRef.value as HTMLElement | null)?.focus()
+  ; (parentSelectTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 /**
@@ -909,9 +923,9 @@ function selectParent(parentIp: string) {
  */
 function handleClickOutsideParentSelect(event: MouseEvent) {
   if (
-    isParentSelectOpen.value &&
-    parentSelectTriggerRef.value && !(parentSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
-    parentSelectOptionsRef.value && !(parentSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
+      isParentSelectOpen.value &&
+      parentSelectTriggerRef.value && !(parentSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
+      parentSelectOptionsRef.value && !(parentSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
   ) {
     isParentSelectOpen.value = false
   }
@@ -976,9 +990,9 @@ function selectPreset(presetKey: string) {
  */
 function handleClickOutsidePresetSelect(event: MouseEvent) {
   if (
-    isPresetSelectOpen.value &&
-    presetSelectTriggerRef.value && !(presetSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
-    presetSelectOptionsRef.value && !(presetSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
+      isPresetSelectOpen.value &&
+      presetSelectTriggerRef.value && !(presetSelectTriggerRef.value as HTMLElement).contains(event.target as Node) &&
+      presetSelectOptionsRef.value && !(presetSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
   ) {
     isPresetSelectOpen.value = false
   }
@@ -996,7 +1010,7 @@ function toggleColorPicker() {
  */
 function closeColorPicker() {
   isColorPickerOpen.value = false
-    ; (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
+  ; (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
 }
 
 // --- (E) 导入/导出 (IO) 操作 ---
@@ -1045,8 +1059,8 @@ const sampleConfigJson = `{
 async function loadSampleConfig() {
   if (config.value.servers.length > 0) {
     const confirmed = await showConfirm(
-      '加载示例将会覆盖您当前的配置，确定要继续吗？',
-      '加载示例确认'
+        '加载示例将会覆盖您当前的配置，确定要继续吗？',
+        '加载示例确认'
     );
     if (!confirmed) {
       return;
@@ -1065,8 +1079,8 @@ async function loadSampleConfig() {
 async function loadConfig() {
   if (config.value.servers.length > 0) {
     const confirmed = await showConfirm(
-      '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
-      '覆盖确认'
+        '您确定要加载新的配置吗？\n当前编辑器中的所有服务器都将被替换。',
+        '覆盖确认'
     );
     if (!confirmed) {
       return;
@@ -1295,11 +1309,11 @@ watch(config, (newConfig) => {
 function buildTree(flatList: Server[]): Server[] {
   const map: Record<string, Server> = {}
   const serversWithChildren: Server[] = flatList
-    .map(server => {
-      const serverCopy = { ...server, children: [] }
-      map[serverCopy.ip] = serverCopy
-      return serverCopy
-    })
+      .map(server => {
+        const serverCopy = { ...server, children: [] }
+        map[serverCopy.ip] = serverCopy
+        return serverCopy
+      })
 
   const tree: Server[] = []
 
@@ -1372,24 +1386,24 @@ function flattenTreeAndSync() {
 
 // 监听 `config.servers` 的变化，并自动更新 `serverTree`
 const stopWatch = watch(
-  () => config.value.servers,
-  (newFlatList) => {
-    serverTree.value = buildTree(newFlatList)
-  },
-  {
-    deep: true,
-    immediate: true
-  }
+    () => config.value.servers,
+    (newFlatList) => {
+      serverTree.value = buildTree(newFlatList)
+    },
+    {
+      deep: true,
+      immediate: true
+    }
 )
 
 const startWatch = () => {
   stopWatch() // 确保旧的已停止
   watch(
-    () => config.value.servers,
-    (newFlatList) => {
-      serverTree.value = buildTree(newFlatList)
-    },
-    { deep: true, immediate: true }
+      () => config.value.servers,
+      (newFlatList) => {
+        serverTree.value = buildTree(newFlatList)
+      },
+      { deep: true, immediate: true }
   )
 }
 
@@ -1489,7 +1503,7 @@ onBeforeUnmount(() => {
           <h3>全局设置</h3>
           <div class="form-group">
             <label for="global-footer"
-              style="font-weight: normal; font-size: 0.95rem; color: var(--color-text-primary);">
+                   style="font-weight: normal; font-size: 0.95rem; color: var(--color-text-primary);">
               页脚文本 (Footer)
             </label>
             <input id="global-footer" type="text" v-model="config.footer" placeholder="输入页脚文本" />
@@ -1501,7 +1515,7 @@ onBeforeUnmount(() => {
             </label>
             <label class="toggle-switch">
               <input type="checkbox" v-model="config.show_offline_by_default" id="global_show_offline"
-                class="toggle-switch-input" />
+                     class="toggle-switch-input" />
               <span class="toggle-switch-slider"></span>
             </label>
             <p class="form-help-text" style="margin-left: 10px; margin-top: 0; margin-bottom: 0;">
@@ -1528,9 +1542,9 @@ onBeforeUnmount(() => {
           </div>
 
           <draggable v-if="serverTree && serverTree.length > 0" v-model="serverTree"
-            :item-key="(server: Server) => server.ip" handle=".drag-handle"
-            :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
-            :swap-threshold="0.2" class="server-list" :name="'server-list-anim-root'">
+                     :item-key="(server: Server) => server.ip" handle=".drag-handle"
+                     :group="{ name: 'servers', pull: true, put: true }" :move="checkMove" @end="flattenTreeAndSync"
+                     :swap-threshold="0.2" class="server-list" :name="'server-list-anim-root'">
             <template #item="{ element: server }">
               <div :key="server.ip" class="server-item-container" :class="{
                 'is-parent-container': server.children.length > 0
@@ -1553,30 +1567,34 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="simple-info-line">
                       <span class="simple-ip" :class="{ 'with-comment': server.comment }">
-                        <template v-if="server.comment">{{ server.ip }}</template>
-                        <template v-else>{{ server.ip }}</template>
+                        <template v-if="server.hide_ip">
+                          {{ server.display_name || '[IP已隐藏]' }}
+                        </template>
+                        <template v-else>
+                          {{ server.ip }}
+                        </template>
                       </span>
                       <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                     </div>
                   </div>
                   <div class="simple-actions">
                     <button @click="addChildServer(server)" class="btn btn-add-child-simple btn-icon-simple"
-                      title="添加子服务器">
+                            title="添加子服务器">
                       <font-awesome-icon :icon="faPlus" />
                     </button>
                     <button @click="openServerModal(server)" class="btn btn-edit-simple btn-icon-simple" title="编辑服务器">
                       <font-awesome-icon :icon="faEdit" />
                     </button>
                     <button @click="removeServer(server)" class="btn btn-danger btn-remove-simple btn-icon-simple"
-                      title="删除服务器">
+                            title="删除服务器">
                       <font-awesome-icon :icon="faTrash" />
                     </button>
                   </div>
                 </div>
 
                 <draggable v-model="server.children" :item-key="(child: Server) => child.ip" handle=".drag-handle"
-                  :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync" :swap-threshold="0.2"
-                  class="server-list child-list" :name="'server-list-anim-child'">
+                           :group="{ name: 'servers', pull: true, put: true }" @end="flattenTreeAndSync" :swap-threshold="0.2"
+                           class="server-list child-list" :name="'server-list-anim-child'">
                   <template #item="{ element: childServer }">
                     <div :key="childServer.ip" class="server-item-simple is-child" :class="{
                       'is-ignored': childServer.ignore_in_list
@@ -1594,19 +1612,23 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="simple-info-line">
                           <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
-                            <template v-if="childServer.comment">{{ childServer.ip }}</template>
-                            <template v-else>{{ childServer.ip }}</template>
+                            <template v-if="childServer.hide_ip">
+                              {{ childServer.display_name || '[IP已隐藏]' }}
+                            </template>
+                            <template v-else>
+                              {{ childServer.ip }}
+                            </template>
                           </span>
                           <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                         </div>
                       </div>
                       <div class="simple-actions">
                         <button @click="openServerModal(childServer)" class="btn btn-edit-simple btn-icon-simple"
-                          title="编辑服务器">
+                                title="编辑服务器">
                           <font-awesome-icon :icon="faEdit" />
                         </button>
                         <button @click="removeServer(childServer)"
-                          class="btn btn-danger btn-remove-simple btn-icon-simple" title="删除服务器">
+                                class="btn btn-danger btn-remove-simple btn-icon-simple" title="删除服务器">
                           <font-awesome-icon :icon="faTrash" />
                         </button>
                       </div>
@@ -1631,7 +1653,7 @@ onBeforeUnmount(() => {
           <div class="accordion-header" @click="toggleImportAccordion">
             <h3 class="io-header">1. 导入 (Import)</h3>
             <font-awesome-icon v-if="isMobileView" :icon="faChevronDown" class="accordion-icon"
-              :class="{ 'is-rotated': !isImportCollapsed && isMobileView }" />
+                               :class="{ 'is-rotated': !isImportCollapsed && isMobileView }" />
           </div>
           <div class="accordion-content" :class="{ 'is-collapsed': isImportCollapsed && isMobileView }">
             <p>粘贴分享链接，或机器人导出的数据（如/mcs import命令、JSON等）：</p>
@@ -1651,7 +1673,7 @@ onBeforeUnmount(() => {
           <div class="accordion-header" @click="toggleExportAccordion">
             <h3 class="io-header">2. 导出 (Export)</h3>
             <font-awesome-icon v-if="isMobileView" :icon="faChevronDown" class="accordion-icon"
-              :class="{ 'is-rotated': !isExportCollapsed && isMobileView }" />
+                               :class="{ 'is-rotated': !isExportCollapsed && isMobileView }" />
           </div>
           <div class="accordion-content" :class="{ 'is-collapsed': isExportCollapsed && isMobileView }">
             <p>复制生成的命令，并将其发送到QQ群聊中：</p>
@@ -1672,7 +1694,7 @@ onBeforeUnmount(() => {
     <transition name="modal-fade">
       <div v-if="isModalVisible" class="modal-overlay" role="presentation" @click.self="onModalCancel">
         <div class="modal-box" ref="alertModalRef" role="dialog" aria-modal="true"
-          :aria-labelledby="modalIds.alertTitle" :aria-describedby="modalIds.alertMessage" tabindex="-1">
+             :aria-labelledby="modalIds.alertTitle" :aria-describedby="modalIds.alertMessage" tabindex="-1">
           <div class="modal-header">
             <h3 :id="modalIds.alertTitle">{{ modalTitle }}</h3>
           </div>
@@ -1681,7 +1703,7 @@ onBeforeUnmount(() => {
           </div>
           <div class="modal-footer">
             <button v-if="modalType === 'confirm'" @click="onModalCancel" class="btn btn-modal-cancel"
-              type="button">取消</button>
+                    type="button">取消</button>
             <button @click="onModalConfirm" class="btn btn-modal-confirm" type="button">确认</button>
           </div>
         </div>
@@ -1691,9 +1713,9 @@ onBeforeUnmount(() => {
 
     <transition name="modal-fade">
       <div v-if="isServerModalVisible" class="modal-overlay edit-modal" role="presentation"
-        @click.self="closeServerModal">
+           @click.self="closeServerModal">
         <div class="modal-box edit-modal-box" ref="serverModalRef" role="dialog" aria-modal="true"
-          :aria-labelledby="modalIds.serverTitle" :aria-describedby="modalIds.serverBody" tabindex="-1">
+             :aria-labelledby="modalIds.serverTitle" :aria-describedby="modalIds.serverBody" tabindex="-1">
 
           <div class="modal-header">
             <h3 v-if="modalMode === 'add'" :id="modalIds.serverTitle">
@@ -1726,28 +1748,72 @@ onBeforeUnmount(() => {
               </div>
 
               <div class="form-row">
+                <div class="form-group grow">
+                  <label>显示名称 (Display Name)</label>
+                  <input type="text" v-model="currentServerData.display_name" placeholder="当隐藏IP时显示此名称" />
+                  <p class="form-help-text" style="margin-top: 5px;">
+                    仅在勾选“隐藏IP”时生效。
+                  </p>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div style="padding-top: 10px;">
+                  <div class="form-group-toggle" style="margin-top: 0;">
+                    <label class="toggle-switch">
+                      <input type="checkbox" v-model="currentServerData.ignore_in_list"
+                             :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
+                      <span class="toggle-switch-slider"></span>
+                    </label>
+                    <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                           class="toggle-switch-label">
+                      <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏
+                    </label>
+                  </div>
+                  <p class="form-help-text" style="margin-top: 8px; margin-bottom: 0; padding-left: 5px;">
+                    (勾选后, 该服务器将不会显示在 /mcs 的列表图片中)
+                  </p>
+                </div>
+                <div style="padding-top: 10px;">
+                  <div class="form-group-toggle" style="margin-top: 0;">
+                    <label class="toggle-switch">
+                      <input type="checkbox" v-model="currentServerData.hide_ip" :id="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
+                      <span class="toggle-switch-slider"></span>
+                    </label>
+                    <label :for="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
+                           class="toggle-switch-label">
+                      <font-awesome-icon :icon="faEyeSlash" /> 隐藏 IP
+                    </label>
+                  </div>
+                  <p class="form-help-text" style="margin-top: 8px; margin-bottom: 0; padding-left: 5px;">
+                    (勾选后, 将使用“显示名称”替代IP地址)
+                  </p>
+                </div>
+              </div>
+
+              <div class="form-row">
 
                 <div class="form-group" style="flex-grow: 1;"> <label>标签 / 颜色</label>
                   <div class="form-compound-input">
                     <input type="text" v-model="currentServerData.tag"
-                      @input="checkIfCustom(currentServerData as Server)" placeholder="留空则不显示"
-                      class="form-compound-input-text" />
+                           @input="checkIfCustom(currentServerData as Server)" placeholder="留空则不显示"
+                           class="form-compound-input-text" />
 
                     <div class="color-picker-wrapper">
                       <button type="button" class="custom-color-trigger" ref="colorPickerTriggerRef"
-                        :style="{ backgroundColor: currentServerData.tag_color_with_hash }"
-                        @click.stop="toggleColorPicker">
+                              :style="{ backgroundColor: currentServerData.tag_color_with_hash }"
+                              @click.stop="toggleColorPicker">
                       </button>
 
                       <transition name="modal-fade">
                         <div v-if="isColorPickerOpen" class="color-picker-modal-overlay" @click.self="closeColorPicker"
-                          role="presentation">
+                             role="presentation">
                           <div class="color-picker-modal-box" ref="colorPickerPanelRef" role="dialog" aria-modal="true">
                             <ColorPicker is-widget format="hex" :disable-alpha="true"
-                              v-model:pureColor="currentServerData.tag_color_with_hash"
-                              @pureColorChange="onColorInput(currentServerData as Server)" />
+                                         v-model:pureColor="currentServerData.tag_color_with_hash"
+                                         @pureColorChange="onColorInput(currentServerData as Server)" />
                             <button type="button" class="btn btn-modal-confirm btn-color-picker-done"
-                              @click="closeColorPicker">
+                                    @click="closeColorPicker">
                               完成
                             </button>
                           </div>
@@ -1762,9 +1828,9 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="presetSelectTriggerRef"
-                      @click="togglePresetSelect" @keydown="handlePresetSelectKeydown" aria-haspopup="listbox"
-                      :aria-expanded="isPresetSelectOpen"
-                      :aria-activedescendant="(isPresetSelectOpen && activePresetIndex > -1 ? `preset-option-${activePresetIndex}` : undefined)">
+                            @click="togglePresetSelect" @keydown="handlePresetSelectKeydown" aria-haspopup="listbox"
+                            :aria-expanded="isPresetSelectOpen"
+                            :aria-activedescendant="(isPresetSelectOpen && activePresetIndex > -1 ? `preset-option-${activePresetIndex}` : undefined)">
 
                       <span v-if="selectedPresetObject" class="selected-option-content">
                         <span class="simple-tag-small" :style="{
@@ -1780,20 +1846,20 @@ onBeforeUnmount(() => {
 
                     <transition name="modal-fade">
                       <ul v-if="isPresetSelectOpen" class="custom-select-options" ref="presetSelectOptionsRef"
-                        role="listbox">
+                          role="listbox">
 
                         <li :id="`preset-option-0`" class="custom-select-option"
-                          :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
-                          @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
+                            :class="{ 'is-selected': !currentServerData.selectedPreset, 'is-active': activePresetIndex === 0 }"
+                            @click="selectPreset('')" role="option" :aria-selected="!currentServerData.selectedPreset">
                           <span class="option-placeholder">-- 自定义 --</span>
                         </li>
 
                         <li v-for="(preset, key, index) in presets" :key="key" :id="`preset-option-${index + 1}`"
-                          class="custom-select-option" :class="{
+                            class="custom-select-option" :class="{
                             'is-selected': currentServerData.selectedPreset === key,
                             'is-active': activePresetIndex === index + 1
                           }" @click="selectPreset(key)" role="option"
-                          :aria-selected="currentServerData.selectedPreset === key">
+                            :aria-selected="currentServerData.selectedPreset === key">
 
                           <span class="simple-tag-small" :style="{
                             backgroundColor: preset.tag_color_with_hash,
@@ -1819,10 +1885,10 @@ onBeforeUnmount(() => {
                   <div class="custom-select-container">
 
                     <button type="button" class="custom-select-trigger" ref="parentSelectTriggerRef"
-                      @click="toggleParentSelect" @keydown="handleParentSelectKeydown" :disabled="(modalMode === MODAL_MODE.EDIT && currentServerData.children && currentServerData.children.length > 0) ||
+                            @click="toggleParentSelect" @keydown="handleParentSelectKeydown" :disabled="(modalMode === MODAL_MODE.EDIT && currentServerData.children && currentServerData.children.length > 0) ||
                         (potentialParentServers.length === 0)
                         " aria-haspopup="listbox" :aria-expanded="isParentSelectOpen"
-                      :aria-activedescendant="(isParentSelectOpen && activeParentIndex > -1 ? `parent-option-${activeParentIndex}` : undefined)">
+                            :aria-activedescendant="(isParentSelectOpen && activeParentIndex > -1 ? `parent-option-${activeParentIndex}` : undefined)">
 
                       <span v-if="selectedParent" class="selected-option-content">
                         <span v-if="selectedParent.tag" class="simple-tag-small" :style="{
@@ -1831,7 +1897,7 @@ onBeforeUnmount(() => {
                         }">{{ selectedParent.tag }}</span>
                         <span class="option-text">
                           <template v-if="selectedParent.comment">{{ selectedParent.comment }} ({{ selectedParent.ip
-                          }})
+                            }})
                           </template>
                           <template v-else>{{ selectedParent.ip }}</template>
                         </span>
@@ -1843,22 +1909,22 @@ onBeforeUnmount(() => {
 
                     <transition name="modal-fade">
                       <ul v-if="isParentSelectOpen" class="custom-select-options is-parent-select"
-                        ref="parentSelectOptionsRef" role="listbox">
+                          ref="parentSelectOptionsRef" role="listbox">
 
                         <li :id="`parent-option-0`" class="custom-select-option"
-                          :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
-                          @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
+                            :class="{ 'is-selected': !currentServerData.parent_ip, 'is-active': activeParentIndex === 0 }"
+                            @click="selectParent('')" role="option" :aria-selected="!currentServerData.parent_ip">
                           <span class="option-placeholder">-- 默认为根服务器 --</span>
                         </li>
 
                         <li v-for="(parent, index) in potentialParentServers" :key="parent.ip"
-                          :id="`parent-option-${index + 1}`" class="custom-select-option" :class="{
+                            :id="`parent-option-${index + 1}`" class="custom-select-option" :class="{
                             'is-selected': currentServerData.parent_ip === parent.ip,
                             'is-disabled': parent.ip === editingServerIp,
                             'is-active': activeParentIndex === index + 1
                           }" @click="parent.ip === editingServerIp ? null : selectParent(parent.ip)" role="option"
-                          :aria-selected="currentServerData.parent_ip === parent.ip"
-                          :aria-disabled="parent.ip === editingServerIp">
+                            :aria-selected="currentServerData.parent_ip === parent.ip"
+                            :aria-disabled="parent.ip === editingServerIp">
 
                           <span v-if="parent.tag" class="simple-tag-small" :style="{
                             backgroundColor: parent.tag_color_with_hash,
@@ -1885,11 +1951,11 @@ onBeforeUnmount(() => {
                   <div class="form-group-toggle" style="margin-top: 0;">
                     <label class="toggle-switch">
                       <input type="checkbox" v-model="currentServerData.ignore_in_list"
-                        :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
+                             :id="'ignore_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
                       <span class="toggle-switch-slider"></span>
                     </label>
                     <label :for="'ignore_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                      class="toggle-switch-label">
+                           class="toggle-switch-label">
                       <font-awesome-icon :icon="faEyeSlash" /> 在列表中隐藏
                     </label>
                   </div>
