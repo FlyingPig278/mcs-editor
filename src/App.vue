@@ -1676,7 +1676,7 @@ onBeforeUnmount(() => {
                                :class="{ 'is-rotated': !isExportCollapsed && isMobileView }" />
           </div>
           <div class="accordion-content" :class="{ 'is-collapsed': isExportCollapsed && isMobileView }">
-            <p>复制生成的命令，并将其发送到QQ群聊中：</p>
+            <p>复制生成的命令，并将其发送到原私信中：</p>
             <div class="form-group">
               <textarea :value="importCommand" rows="8" readonly></textarea>
             </div>
