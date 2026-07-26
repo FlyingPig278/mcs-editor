@@ -24,7 +24,7 @@ import pako from 'pako'
 
 // --- 数据压缩与编码 ---
 
-type AuthMode = '' | 'official' | 'mua' | 'yggdrasil' | 'offline' | 'mixed'
+type AuthMode = '' | 'xdu' | 'mua' | 'official' | 'yggdrasil' | 'offline' | 'mixed'
 
 // 定义服务器数据在紧凑数组表示中的索引常量，用于优化体积
 const S_IP = 0;
@@ -44,7 +44,9 @@ const AUTH_MODE_TO_CODE: Record<AuthMode, number> = {
   mua: 2,
   yggdrasil: 3,
   offline: 4,
-  mixed: 5
+  mixed: 5,
+  // 只能追加，不能重排已有编号，否则旧版配置链接会被错误解码。
+  xdu: 6
 }
 
 const CODE_TO_AUTH_MODE: Record<number, AuthMode> = {
@@ -53,7 +55,8 @@ const CODE_TO_AUTH_MODE: Record<number, AuthMode> = {
   2: 'mua',
   3: 'yggdrasil',
   4: 'offline',
-  5: 'mixed'
+  5: 'mixed',
+  6: 'xdu'
 }
 
 function normalizeAuthMode(value: unknown): AuthMode {
@@ -250,20 +253,20 @@ const serverTypeLabels: Record<string, string> = {
 }
 
 const authModeOptions: Array<{ value: AuthMode; label: string; shortLabel: string }> = [
-  { value: '', label: '自动探测 / 继承群默认', shortLabel: '自动' },
-  { value: 'official', label: '正版登录', shortLabel: '正版' },
+  { value: 'xdu', label: 'XDUCraft 本校皮肤站登录', shortLabel: 'XDU' },
   { value: 'mua', label: 'MUA 联合皮肤站登录', shortLabel: 'MUA' },
+  { value: 'official', label: '正版登录', shortLabel: '正版' },
   { value: 'yggdrasil', label: '第三方外置登录', shortLabel: '外置' },
   { value: 'offline', label: '离线验证', shortLabel: '离线登录' },
   { value: 'mixed', label: '混合验证', shortLabel: '混合' }
 ]
 
-const authModeLabels: Record<AuthMode, string> = Object.fromEntries(
+const authModeLabels: Partial<Record<AuthMode, string>> = Object.fromEntries(
     authModeOptions.map(option => [option.value, option.shortLabel])
-) as Record<AuthMode, string>
+) as Partial<Record<AuthMode, string>>
 
 function getAuthModeLabel(value: unknown): string {
-  return authModeLabels[normalizeAuthMode(value)]
+  return authModeLabels[normalizeAuthMode(value)] ?? ''
 }
 
 // --- 3. 核心响应式状态 ---
@@ -326,6 +329,10 @@ const isPresetSelectOpen = ref(false)
 const presetSelectTriggerRef = ref<HTMLElement | null>(null)
 const presetSelectOptionsRef = ref<HTMLElement | null>(null)
 const activePresetIndex = ref(-1)
+const isAuthModeSelectOpen = ref(false)
+const authModeSelectTriggerRef = ref<HTMLElement | null>(null)
+const authModeSelectOptionsRef = ref<HTMLElement | null>(null)
+const activeAuthModeIndex = ref(-1)
 const isColorPickerOpen = ref(false)
 const colorPickerTriggerRef = ref<HTMLElement | null>(null)
 const colorPickerPanelRef = ref<HTMLElement | null>(null)
@@ -423,6 +430,12 @@ function handleGlobalKeydown(event: KeyboardEvent) {
       isColorPickerOpen.value = false;
       (colorPickerTriggerRef.value as HTMLElement | null)?.focus()
     }
+    else if (isAuthModeSelectOpen.value) {
+      event.preventDefault()
+      isAuthModeSelectOpen.value = false
+      activeAuthModeIndex.value = -1
+      authModeSelectTriggerRef.value?.focus()
+    }
     else if (isPresetSelectOpen.value) {
       event.preventDefault()
       isPresetSelectOpen.value = false;
@@ -440,6 +453,11 @@ function handleGlobalKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Tab') {
     if (isColorPickerOpen.value) {
       isColorPickerOpen.value = false
+      trapFocus(event, serverModalRef)
+    }
+    else if (isAuthModeSelectOpen.value) {
+      isAuthModeSelectOpen.value = false
+      activeAuthModeIndex.value = -1
       trapFocus(event, serverModalRef)
     }
     else if (isPresetSelectOpen.value) {
@@ -536,6 +554,11 @@ const selectedPresetObject = computed<{ tag: string; tag_color_with_hash: string
     return undefined
   }
   return presets[currentServerData.value.selectedPreset]
+})
+
+const selectedAuthModeOption = computed(() => {
+  const selectedMode = normalizeAuthMode(currentServerData.value?.auth_mode)
+  return authModeOptions.find(option => option.value === selectedMode)
 })
 
 const isAddMode = computed(() => modalMode.value === MODAL_MODE.ADD);
@@ -665,6 +688,8 @@ async function openServerModal(serverToEdit: Server | null = null, parentServer:
   }
 
   isSaving.value = false;
+  isAuthModeSelectOpen.value = false
+  activeAuthModeIndex.value = -1
 
   // 先将数据设为 null，以确保 Vue 的 v-if 指令能够正确触发组件的重新渲染
   currentServerData.value = null
@@ -688,6 +713,8 @@ async function openServerModal(serverToEdit: Server | null = null, parentServer:
  */
 function closeServerModal() {
   isServerModalVisible.value = false
+  isAuthModeSelectOpen.value = false
+  activeAuthModeIndex.value = -1
 
   if (cancelModalTimeout) {
     clearTimeout(cancelModalTimeout)
@@ -716,6 +743,13 @@ async function saveServer() {
     showAlert('服务器地址 (IP) 不能为空！', '保存失败');
     isSaving.value = false;
     return;
+  }
+
+  server.auth_mode = normalizeAuthMode(server.auth_mode)
+  if (!server.auth_mode) {
+    showAlert('请选择登录验证方式！', '保存失败')
+    isSaving.value = false
+    return
   }
 
   const isIpChanged = newIp !== editingServerIp.value;
@@ -926,6 +960,8 @@ function onColorInput(server: Server) {
  * @description 切换父服务器下拉框的显示。
  */
 function toggleParentSelect() {
+  isAuthModeSelectOpen.value = false
+  activeAuthModeIndex.value = -1
   isParentSelectOpen.value = !isParentSelectOpen.value
   if (isParentSelectOpen.value) {
     const currentIndex = potentialParentServers.value.findIndex(p => p.ip === currentServerData.value?.parent_ip);
@@ -993,6 +1029,8 @@ function handleClickOutsideParentSelect(event: MouseEvent) {
  * @description 切换快捷预设下拉框的显示。
  */
 function togglePresetSelect() {
+  isAuthModeSelectOpen.value = false
+  activeAuthModeIndex.value = -1
   isPresetSelectOpen.value = !isPresetSelectOpen.value;
   if (isPresetSelectOpen.value) {
     const presetKeys = Object.keys(presets);
@@ -1053,6 +1091,100 @@ function handleClickOutsidePresetSelect(event: MouseEvent) {
       presetSelectOptionsRef.value && !(presetSelectOptionsRef.value as HTMLElement).contains(event.target as Node)
   ) {
     isPresetSelectOpen.value = false
+  }
+}
+
+/**
+ * @description 切换登录验证方式下拉框，并把键盘高亮定位到当前选项。
+ */
+function toggleAuthModeSelect() {
+  isPresetSelectOpen.value = false
+  activePresetIndex.value = -1
+  isParentSelectOpen.value = false
+  activeParentIndex.value = -1
+  isAuthModeSelectOpen.value = !isAuthModeSelectOpen.value
+
+  if (isAuthModeSelectOpen.value) {
+    const selectedMode = normalizeAuthMode(currentServerData.value?.auth_mode)
+    activeAuthModeIndex.value = Math.max(
+        0,
+        authModeOptions.findIndex(option => option.value === selectedMode)
+    )
+    nextTick(() => {
+      const trigger = authModeSelectTriggerRef.value
+      const options = authModeSelectOptionsRef.value
+      const modalBody = trigger?.closest('.modal-body')
+      if (!(modalBody instanceof HTMLElement) || !options) return
+
+      // 绝对定位的列表会被可滚动的弹窗正文裁切；仅滚动正文到恰好容纳列表，
+      // 不改变弹窗或其他自定义下拉框的布局。
+      const overflow = options.getBoundingClientRect().bottom
+          - modalBody.getBoundingClientRect().bottom
+      if (overflow > 0) {
+        modalBody.scrollTop += overflow + 8
+      }
+    })
+  } else {
+    activeAuthModeIndex.value = -1
+  }
+}
+
+/**
+ * @description 支持上下方向键、Home/End 和 Enter/Space 选择登录验证方式。
+ */
+function handleAuthModeSelectKeydown(event: KeyboardEvent) {
+  if (!isAuthModeSelectOpen.value) {
+    if (['ArrowDown', 'ArrowUp', 'Enter', ' '].includes(event.key)) {
+      event.preventDefault()
+      toggleAuthModeSelect()
+    }
+    return
+  }
+
+  const lastIndex = authModeOptions.length - 1
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    activeAuthModeIndex.value = (activeAuthModeIndex.value + 1) % authModeOptions.length
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    activeAuthModeIndex.value = (activeAuthModeIndex.value - 1 + authModeOptions.length) % authModeOptions.length
+  } else if (event.key === 'Home') {
+    event.preventDefault()
+    activeAuthModeIndex.value = 0
+  } else if (event.key === 'End') {
+    event.preventDefault()
+    activeAuthModeIndex.value = lastIndex
+  } else if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault()
+    const selected = authModeOptions[activeAuthModeIndex.value]
+    if (selected) selectAuthMode(selected.value)
+  }
+
+  nextTick(() => {
+    authModeSelectOptionsRef.value
+        ?.querySelector('.is-active')
+        ?.scrollIntoView({ block: 'nearest' })
+  })
+}
+
+function selectAuthMode(mode: AuthMode) {
+  if (currentServerData.value) {
+    currentServerData.value.auth_mode = mode
+  }
+  isAuthModeSelectOpen.value = false
+  activeAuthModeIndex.value = -1
+  authModeSelectTriggerRef.value?.focus()
+}
+
+function handleClickOutsideAuthModeSelect(event: MouseEvent) {
+  const target = event.target as Node
+  if (
+      isAuthModeSelectOpen.value &&
+      !authModeSelectTriggerRef.value?.contains(target) &&
+      !authModeSelectOptionsRef.value?.contains(target)
+  ) {
+    isAuthModeSelectOpen.value = false
+    activeAuthModeIndex.value = -1
   }
 }
 
@@ -1471,6 +1603,14 @@ const startWatch = () => {
 // --- 9. 初始化与生命周期 ---
 
 onMounted(async () => {
+  // 先注册全局交互，确保通过 URL 导入配置后提前返回时，下拉框仍可正常使用。
+  document.addEventListener('keydown', handleGlobalKeydown)
+  document.addEventListener('mousedown', handleClickOutsideParentSelect)
+  document.addEventListener('mousedown', handleClickOutsidePresetSelect)
+  document.addEventListener('mousedown', handleClickOutsideAuthModeSelect)
+  window.addEventListener('resize', handleResize)
+  handleResize()
+
   // 优先检查 URL search params 中是否有名为 'data' 的参数
   const urlParams = new URLSearchParams(window.location.search);
   const dataFromUrl = urlParams.get('data');
@@ -1527,10 +1667,6 @@ onMounted(async () => {
     applyTheme(prefersDark)
   }
 
-  // 添加全局事件监听
-  document.addEventListener('keydown', handleGlobalKeydown);
-  window.addEventListener('resize', handleResize);
-  handleResize(); // 初始加载时执行一次
 });
 
 onBeforeUnmount(() => {
@@ -1539,6 +1675,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', handleResize);
   document.removeEventListener('mousedown', handleClickOutsideParentSelect);
   document.removeEventListener('mousedown', handleClickOutsidePresetSelect);
+  document.removeEventListener('mousedown', handleClickOutsideAuthModeSelect);
 });
 
 </script>
@@ -1817,15 +1954,58 @@ onBeforeUnmount(() => {
 
               <div class="form-row">
                 <div class="form-group grow">
-                  <label for="auth-mode-select">登录验证方式 (Auth Mode)</label>
-                  <select id="auth-mode-select" v-model="currentServerData.auth_mode">
-                    <option v-for="option in authModeOptions" :key="option.value || 'auto'"
-                            :value="option.value">
-                      {{ option.label }}
-                    </option>
-                  </select>
+                  <label id="auth-mode-select-label">
+                    登录验证方式 (Auth Mode) <span class="required">*</span>
+                  </label>
+                  <div class="custom-select-container">
+                    <button id="auth-mode-select" ref="authModeSelectTriggerRef" type="button"
+                            class="custom-select-trigger"
+                            aria-haspopup="listbox" aria-labelledby="auth-mode-select-label auth-mode-select"
+                            aria-required="true"
+                            :aria-invalid="!normalizeAuthMode(currentServerData.auth_mode)"
+                            :aria-expanded="isAuthModeSelectOpen"
+                            :aria-activedescendant="isAuthModeSelectOpen && activeAuthModeIndex > -1
+                              ? `auth-mode-option-${activeAuthModeIndex}`
+                              : undefined"
+                            @click="toggleAuthModeSelect"
+                            @keydown="handleAuthModeSelectKeydown">
+                      <span v-if="selectedAuthModeOption" class="selected-option-content">
+                        <span class="auth-mode-badge"
+                              :data-mode="selectedAuthModeOption.value">
+                          {{ selectedAuthModeOption.shortLabel }}
+                        </span>
+                        <span class="option-text">{{ selectedAuthModeOption.label }}</span>
+                      </span>
+                      <span v-else class="option-placeholder">-- 请选择验证方式 --</span>
+                      <span class="custom-select-arrow"
+                            :class="{ 'is-open': isAuthModeSelectOpen }">▼</span>
+                    </button>
+
+                    <transition name="modal-fade">
+                      <ul v-if="isAuthModeSelectOpen" ref="authModeSelectOptionsRef"
+                          class="custom-select-options auth-mode-options" role="listbox"
+                          aria-labelledby="auth-mode-select-label">
+                        <li v-for="(option, index) in authModeOptions"
+                            :id="`auth-mode-option-${index}`"
+                            :key="option.value"
+                            class="custom-select-option"
+                            :class="{
+                              'is-selected': normalizeAuthMode(currentServerData.auth_mode) === option.value,
+                              'is-active': activeAuthModeIndex === index
+                            }"
+                            role="option"
+                            :aria-selected="normalizeAuthMode(currentServerData.auth_mode) === option.value"
+                            @click="selectAuthMode(option.value)">
+                          <span class="auth-mode-badge" :data-mode="option.value">
+                            {{ option.shortLabel }}
+                          </span>
+                          <span class="option-text">{{ option.label }}</span>
+                        </li>
+                      </ul>
+                    </transition>
+                  </div>
                   <p class="form-help-text">
-                    选择“自动探测”时，机器人会优先继承本群默认值；未设置群默认时再根据在线玩家样本判断。
+                    必填。请按服务器实际配置的认证后端选择；状态协议无法可靠自动判断该信息。
                   </p>
                 </div>
               </div>
@@ -2555,6 +2735,10 @@ textarea {
   background: #2ea043;
 }
 
+.auth-mode-badge[data-mode="xdu"] {
+  background: #1f6feb;
+}
+
 .auth-mode-badge[data-mode="mua"] {
   background: #5865f2;
 }
@@ -2937,8 +3121,7 @@ textarea {
   margin-left: 4px;
 }
 
-.server-form input[type="text"],
-.server-form select {
+.server-form input[type="text"] {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -2952,14 +3135,7 @@ textarea {
   z-index: 1;
 }
 
-.server-form select {
-  min-height: 45px;
-  padding-left: 26px;
-  cursor: pointer;
-}
-
-.server-form input[type="text"]:focus,
-.server-form select:focus {
+.server-form input[type="text"]:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
@@ -3033,7 +3209,7 @@ textarea {
   min-width: 0;
 }
 
-/* --- 10. 自定义下拉框 (预设/父服务器) --- */
+/* --- 10. 自定义下拉框（验证方式/预设/父服务器） --- */
 .custom-select-container {
   position: relative;
   width: 100%;
@@ -3119,6 +3295,10 @@ textarea {
   padding: 5px;
   margin: 0;
   overscroll-behavior-y: contain;
+}
+
+.custom-select-options.auth-mode-options {
+  max-height: min(285px, 48vh);
 }
 
 .custom-select-option {
