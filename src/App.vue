@@ -25,6 +25,7 @@ import pako from 'pako'
 // --- 数据压缩与编码 ---
 
 type AuthMode = '' | 'xdu' | 'mua' | 'official' | 'yggdrasil' | 'offline' | 'mixed'
+type AddressDisplayMode = 'address' | 'custom' | 'hidden'
 
 // 定义服务器数据在紧凑数组表示中的索引常量，用于优化体积
 const S_IP = 0;
@@ -252,9 +253,19 @@ const serverTypeLabels: Record<string, string> = {
   child: '子服务器'
 }
 
+const addressDisplayModeOptions: Array<{
+  value: AddressDisplayMode
+  label: string
+  description: string
+}> = [
+  { value: 'address', label: '显示查询地址', description: '显示上方用于查询状态的 IP 或域名' },
+  { value: 'custom', label: '自定义线路说明', description: '显示线路名称、连接地址或使用提示' },
+  { value: 'hidden', label: '完全隐藏', description: '只显示“IP 已隐藏”' }
+]
+
 const authModeOptions: Array<{ value: AuthMode; label: string; shortLabel: string }> = [
   { value: 'xdu', label: 'XDUCraft 本校皮肤站登录', shortLabel: 'XDU' },
-  { value: 'mua', label: 'MUA 联合皮肤站登录', shortLabel: 'MUA' },
+  { value: 'mua', label: 'MUA 联合登录（含 XDU）', shortLabel: 'MUA' },
   { value: 'official', label: '正版登录', shortLabel: '正版' },
   { value: 'yggdrasil', label: '第三方外置登录', shortLabel: '外置' },
   { value: 'offline', label: '离线验证', shortLabel: '离线登录' },
@@ -267,6 +278,11 @@ const authModeLabels: Partial<Record<AuthMode, string>> = Object.fromEntries(
 
 function getAuthModeLabel(value: unknown): string {
   return authModeLabels[normalizeAuthMode(value)] ?? ''
+}
+
+function getServerDisplayAddress(server: Pick<Server, 'ip' | 'hide_ip' | 'display_name'>): string {
+  if (!server.hide_ip) return server.ip
+  return server.display_name?.trim() || '[IP 已隐藏]'
 }
 
 // --- 3. 核心响应式状态 ---
@@ -315,6 +331,7 @@ const isServerModalVisible = ref(false)
 const modalMode = ref<'add' | 'edit'>('add')
 const currentServerData = ref<Partial<Server> | null>(null)
 const editingServerIp = ref<string | null>(null)
+const addressDisplayMode = ref<AddressDisplayMode>('address')
 const isSaving = ref(false) // 保存按钮的加载状态
 const isDraggingChild = ref(false) // 是否正在拖拽子服务器
 
@@ -675,6 +692,21 @@ function createBlankServer(parentServer: Server | null = null): Partial<Server> 
   }
 }
 
+function inferAddressDisplayMode(server: Partial<Server> | null): AddressDisplayMode {
+  if (!server?.hide_ip) return 'address'
+  return server.display_name?.trim() ? 'custom' : 'hidden'
+}
+
+function selectAddressDisplayMode(mode: AddressDisplayMode): void {
+  addressDisplayMode.value = mode
+  if (!currentServerData.value) return
+
+  currentServerData.value.hide_ip = mode !== 'address'
+  if (mode === 'hidden') {
+    currentServerData.value.display_name = ''
+  }
+}
+
 /**
  * @description 打开服务器编辑弹窗，可用于“添加”或“编辑”模式。
  * @param {Server | null} [serverToEdit=null] - 要编辑的服务器对象。如果为 null，则为添加模式。
@@ -704,6 +736,7 @@ async function openServerModal(serverToEdit: Server | null = null, parentServer:
     editingServerIp.value = null
     currentServerData.value = createBlankServer(parentServer)
   }
+  addressDisplayMode.value = inferAddressDisplayMode(currentServerData.value)
 
   isServerModalVisible.value = true
 }
@@ -724,6 +757,7 @@ function closeServerModal() {
   cancelModalTimeout = window.setTimeout(() => {
     currentServerData.value = null
     editingServerIp.value = null
+    addressDisplayMode.value = 'address'
     cancelModalTimeout = null
   }, 300)
 }
@@ -743,6 +777,23 @@ async function saveServer() {
     showAlert('服务器地址 (IP) 不能为空！', '保存失败');
     isSaving.value = false;
     return;
+  }
+
+  if (addressDisplayMode.value === 'custom') {
+    server.display_name = (server.display_name || '').trim()
+    if (!server.display_name) {
+      showAlert('请填写要展示的线路名称、连接地址或提示信息！', '保存失败')
+      isSaving.value = false
+      return
+    }
+    // 沿用旧配置编码：hide_ip + display_name 表示“隐藏查询地址并展示自定义内容”。
+    server.hide_ip = true
+  } else if (addressDisplayMode.value === 'hidden') {
+    server.hide_ip = true
+    server.display_name = ''
+  } else {
+    server.hide_ip = false
+    server.display_name = ''
   }
 
   server.auth_mode = normalizeAuthMode(server.auth_mode)
@@ -1768,12 +1819,7 @@ onBeforeUnmount(() => {
                     </div>
                     <div class="simple-info-line">
                       <span class="simple-ip" :class="{ 'with-comment': server.comment }">
-                        <template v-if="server.hide_ip">
-                          {{ server.display_name || '[IP已隐藏]' }}
-                        </template>
-                        <template v-else>
-                          {{ server.ip }}
-                        </template>
+                        {{ getServerDisplayAddress(server) }}
                       </span>
                       <span v-if="server.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                     </div>
@@ -1817,12 +1863,7 @@ onBeforeUnmount(() => {
                         </div>
                         <div class="simple-info-line">
                           <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
-                            <template v-if="childServer.hide_ip">
-                              {{ childServer.display_name || '[IP已隐藏]' }}
-                            </template>
-                            <template v-else>
-                              {{ childServer.ip }}
-                            </template>
+                            {{ getServerDisplayAddress(childServer) }}
                           </span>
                           <span v-if="childServer.ignore_in_list" class="simple-ignored-badge">(已隐藏)</span>
                         </div>
@@ -2007,29 +2048,47 @@ onBeforeUnmount(() => {
                   <p class="form-help-text">
                     必填。请按服务器实际配置的认证后端选择；状态协议无法可靠自动判断该信息。
                   </p>
+                  <p v-if="normalizeAuthMode(currentServerData.auth_mode) === 'mua'"
+                     class="auth-mode-guidance">
+                    MUA 是包含 XDUCraft 本校皮肤站的联合认证；玩家可直接使用 XDU 账号登录。
+                  </p>
                 </div>
               </div>
 
-              <!-- IP 隐藏/公开显示名称联动区域 -->
+              <!-- 图片地址显示方式：内部继续映射到旧版 hide_ip + display_name 字段。 -->
               <div class="form-row">
-                <!-- 隐藏 IP 地址开关 -->
-                <div class="form-group-toggle">
-                  <label class="toggle-switch">
-                    <input type="checkbox" v-model="currentServerData.hide_ip" :id="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip)" class="toggle-switch-input" />
-                    <span class="toggle-switch-slider"></span>
-                  </label>
-                  <label :for="'hide_ip_mod_' + sanitizeIpForId(currentServerData.ip || 'new')"
-                         class="toggle-switch-label">
-                    <font-awesome-icon :icon="faEyeSlash" /> 隐藏 IP 地址
-                  </label>
-                </div>
-
-                <!-- 公开显示名称输入框 (与隐藏IP联动) -->
                 <div class="form-group grow">
-                  <label for="display-name-input">公开显示名称 (Public Name)</label>
+                  <label id="address-display-mode-label">图片中的地址显示方式</label>
+                  <div class="address-display-options" role="radiogroup"
+                       aria-labelledby="address-display-mode-label">
+                    <label v-for="option in addressDisplayModeOptions" :key="option.value"
+                           class="address-display-choice">
+                      <input type="radio" name="address-display-mode"
+                             :value="option.value"
+                             :checked="addressDisplayMode === option.value"
+                             @change="selectAddressDisplayMode(option.value)" />
+                      <span class="address-display-choice-content">
+                        <strong>{{ option.label }}</strong>
+                        <small>{{ option.description }}</small>
+                      </span>
+                    </label>
+                  </div>
+                  <p class="form-help-text">
+                    实际状态查询始终使用最上方的服务器地址；这里只控制图片和列表如何展示。
+                  </p>
+                </div>
+              </div>
+
+              <div v-if="addressDisplayMode === 'custom'" class="form-row">
+                <div class="form-group grow">
+                  <label for="display-name-input">
+                    线路名称或连接提示 <span class="required">*</span>
+                  </label>
                   <input type="text" id="display-name-input" v-model="currentServerData.display_name"
-                         :disabled="!currentServerData.hide_ip"
-                         placeholder="IP隐藏时将显示此文本" />
+                         placeholder="例如：校园网直连 play.example.com | 校外请用备用线路" />
+                  <p class="form-help-text">
+                    域名点号、端口冒号和“|”分隔线会在图片中自动添加适合像素字体的间距。
+                  </p>
                 </div>
               </div>
 
@@ -3149,6 +3208,74 @@ textarea {
   line-height: 1.4;
 }
 
+.auth-mode-guidance {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid color-mix(in srgb, #5865f2 45%, var(--color-border));
+  border-radius: 10px;
+  background: color-mix(in srgb, #5865f2 10%, var(--color-surface));
+  color: var(--color-text-primary);
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.address-display-options {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.address-display-choice {
+  position: relative;
+  cursor: pointer;
+}
+
+.address-display-choice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.address-display-choice-content {
+  display: flex;
+  min-height: 78px;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 11px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text-primary);
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+}
+
+.address-display-choice-content strong {
+  font-size: 0.9rem;
+}
+
+.address-display-choice-content small {
+  color: var(--color-text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.35;
+}
+
+.address-display-choice:hover .address-display-choice-content {
+  border-color: var(--color-primary);
+}
+
+.address-display-choice input:checked + .address-display-choice-content {
+  border-color: var(--color-primary);
+  background: color-mix(in srgb, var(--color-primary) 9%, var(--color-surface));
+  box-shadow: 0 0 0 2px var(--color-focus-outline);
+}
+
+.address-display-choice input:focus-visible + .address-display-choice-content {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+
 .edit-modal-box .modal-footer {
   display: flex;
   justify-content: flex-end;
@@ -3600,6 +3727,14 @@ html.dark-mode ::-webkit-scrollbar-thumb:hover {
 }
 
 @media (max-width: 600px) {
+  .address-display-options {
+    grid-template-columns: 1fr;
+  }
+
+  .address-display-choice-content {
+    min-height: 0;
+  }
+
   .server-item-simple {
     padding: 10px 10px 12px 10px;
     align-items: flex-start;
