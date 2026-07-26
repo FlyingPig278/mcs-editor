@@ -24,15 +24,51 @@ import pako from 'pako'
 
 // --- 数据压缩与编码 ---
 
+type AuthMode = '' | 'official' | 'mua' | 'yggdrasil' | 'offline' | 'mixed'
+
 // 定义服务器数据在紧凑数组表示中的索引常量，用于优化体积
 const S_IP = 0;
 const S_COMMENT = 1;
 const S_TAG = 2;
 const S_TAG_COLOR = 3;
 const S_IGNORE = 4;
-const S_HIDE_IP = 5;      // 新增
-const S_DISPLAY_NAME = 6; // 新增
-const S_CHILDREN = 7;     // 原来的 S_CHILDREN 索引后移
+const S_HIDE_IP = 5;
+const S_DISPLAY_NAME = 6;
+const S_CHILDREN = 7;
+// 只能在末尾追加字段：旧版编辑器会忽略它，新版编辑器读取旧链接时回退为空。
+const S_AUTH_MODE = 8;
+
+const AUTH_MODE_TO_CODE: Record<AuthMode, number> = {
+  '': 0,
+  official: 1,
+  mua: 2,
+  yggdrasil: 3,
+  offline: 4,
+  mixed: 5
+}
+
+const CODE_TO_AUTH_MODE: Record<number, AuthMode> = {
+  0: '',
+  1: 'official',
+  2: 'mua',
+  3: 'yggdrasil',
+  4: 'offline',
+  5: 'mixed'
+}
+
+function normalizeAuthMode(value: unknown): AuthMode {
+  const mode = String(value || '').trim().toLowerCase()
+  return mode in AUTH_MODE_TO_CODE ? mode as AuthMode : ''
+}
+
+function authModeToCode(value: unknown): number {
+  return AUTH_MODE_TO_CODE[normalizeAuthMode(value)]
+}
+
+function codeToAuthMode(value: unknown): AuthMode {
+  const code = Number(value)
+  return Number.isInteger(code) ? (CODE_TO_AUTH_MODE[code] ?? '') : ''
+}
 
 /**
  * 将服务器对象数组转换为更紧凑的数组格式以进行压缩。
@@ -54,7 +90,8 @@ function jsonToCompactArray(servers: Server[]): any[] {
       server.ignore_in_list ? 1 : 0,
       server.hide_ip ? 1 : 0,
       server.display_name || 0,
-      children
+      children,
+      authModeToCode(server.auth_mode)
     ];
   });
 }
@@ -81,6 +118,7 @@ function compactArrayToJson(compactData: any[]): Server[] {
       ignore_in_list: item[S_IGNORE] === 1,
       hide_ip: item.length > S_HIDE_IP ? (item[S_HIDE_IP] === 1) : false,
       display_name: item.length > S_DISPLAY_NAME ? (item[S_DISPLAY_NAME] || '') : '',
+      auth_mode: item.length > S_AUTH_MODE ? codeToAuthMode(item[S_AUTH_MODE]) : '',
       children: children,
       // 以下是需要补全的默认/计算属性
       server_type: 'standalone', // 将在 buildTree 中被修正
@@ -176,6 +214,7 @@ interface Server {
   ignore_in_list: boolean;
   hide_ip: boolean;
   display_name: string;
+  auth_mode: AuthMode;
   priority?: number; // 用于拖拽排序，在拖拽结束后生成
   children: Server[]; // 存储子服务器，用于构建UI树形结构
 }
@@ -208,6 +247,23 @@ const serverTypeLabels: Record<string, string> = {
   standalone: '独立服务器',
   parent: '父服务器',
   child: '子服务器'
+}
+
+const authModeOptions: Array<{ value: AuthMode; label: string; shortLabel: string }> = [
+  { value: '', label: '自动探测 / 继承群默认', shortLabel: '自动' },
+  { value: 'official', label: '正版登录', shortLabel: '正版' },
+  { value: 'mua', label: 'MUA 联合皮肤站登录', shortLabel: 'MUA' },
+  { value: 'yggdrasil', label: '第三方外置登录', shortLabel: '外置' },
+  { value: 'offline', label: '离线验证', shortLabel: '离线登录' },
+  { value: 'mixed', label: '混合验证', shortLabel: '混合' }
+]
+
+const authModeLabels: Record<AuthMode, string> = Object.fromEntries(
+    authModeOptions.map(option => [option.value, option.shortLabel])
+) as Record<AuthMode, string>
+
+function getAuthModeLabel(value: unknown): string {
+  return authModeLabels[normalizeAuthMode(value)]
 }
 
 // --- 3. 核心响应式状态 ---
@@ -425,8 +481,9 @@ const outputJson = computed<AppConfig>(() => {
       tag_color: node.tag_color,
       tag_color_with_hash: node.tag_color_with_hash,
       ignore_in_list: node.ignore_in_list,
-      hide_ip: node.hide_ip,       // [新增]
-      display_name: node.display_name, // [新增]
+      hide_ip: node.hide_ip,
+      display_name: node.display_name,
+      auth_mode: normalizeAuthMode(node.auth_mode),
       children: [],
       server_type: node.server_type || 'standalone',
       parent_ip: node.parent_ip || '',
@@ -590,6 +647,7 @@ function createBlankServer(parentServer: Server | null = null): Partial<Server> 
     ignore_in_list: false,
     hide_ip: false,
     display_name: "",
+    auth_mode: "",
     children: []
   }
 }
@@ -1046,14 +1104,14 @@ const sampleConfigJson = `{
   "footer": "欢迎加入Minecraft交流群！",
   "show_offline_by_default": false,
   "servers": [
-    { "ip": "lobby.example.com", "comment": "主大厅", "tag": "大厅", "tag_color": "3498DB", "ignore_in_list": false, "children": [] },
-    { "ip": "survival.example.com", "comment": "生存世界", "tag": "生存", "tag_color": "2ECC71", "ignore_in_list": false, "children": [
-      { "ip": "survival-res.example.com", "comment": "资源区", "tag": "生存", "tag_color": "2ECC71", "ignore_in_list": false, "children": [] },
-      { "ip": "survival-pvp.example.com", "comment": "PVP区", "tag": "PVP", "tag_color": "E74C3C", "ignore_in_list": true, "children": [] }
+    { "ip": "lobby.example.com", "comment": "主大厅", "tag": "大厅", "tag_color": "3498DB", "auth_mode": "official", "ignore_in_list": false, "children": [] },
+    { "ip": "survival.example.com", "comment": "生存世界", "tag": "生存", "tag_color": "2ECC71", "auth_mode": "mua", "ignore_in_list": false, "children": [
+      { "ip": "survival-res.example.com", "comment": "资源区", "tag": "生存", "tag_color": "2ECC71", "auth_mode": "", "ignore_in_list": false, "children": [] },
+      { "ip": "survival-pvp.example.com", "comment": "PVP区", "tag": "PVP", "tag_color": "E74C3C", "auth_mode": "offline", "ignore_in_list": true, "children": [] }
     ]},
-    { "ip": "creative.example.com", "comment": "创造服", "tag": "创造", "tag_color": "F1C40F", "ignore_in_list": false, "children": [] },
-    { "ip": "modded.example.com", "comment": "模组服", "tag": "模组", "tag_color": "E67E22", "ignore_in_list": false, "children": [] },
-    { "ip": "recreation.example.com", "comment": "高校复原", "tag": "复原", "tag_color": "9B59B6", "ignore_in_list": false, "children": [] }
+    { "ip": "creative.example.com", "comment": "创造服", "tag": "创造", "tag_color": "F1C40F", "auth_mode": "yggdrasil", "ignore_in_list": false, "children": [] },
+    { "ip": "modded.example.com", "comment": "模组服", "tag": "模组", "tag_color": "E67E22", "auth_mode": "mixed", "ignore_in_list": false, "children": [] },
+    { "ip": "recreation.example.com", "comment": "高校复原", "tag": "复原", "tag_color": "9B59B6", "auth_mode": "", "ignore_in_list": false, "children": [] }
   ]
 }`;
 async function loadSampleConfig() {
@@ -1195,6 +1253,9 @@ function parseAndSetConfig(input: string | AppConfig): boolean {
         tag_color_with_hash: (s.tag_color && s.tag_color.length > 0) ? '#' + s.tag_color : '#FF9800',
         selectedPreset: "",
         ignore_in_list: s.ignore_in_list || false,
+        hide_ip: Boolean(s.hide_ip),
+        display_name: typeof s.display_name === 'string' ? s.display_name : "",
+        auth_mode: normalizeAuthMode(s.auth_mode),
         comment: s.comment || "",
         children: []
       };
@@ -1564,6 +1625,9 @@ onBeforeUnmount(() => {
                         {{ server.tag }}
                       </span>
                       <span class="simple-comment" v-if="server.comment">{{ server.comment }}</span>
+                      <span v-if="server.auth_mode" class="auth-mode-badge" :data-mode="server.auth_mode">
+                        {{ getAuthModeLabel(server.auth_mode) }}
+                      </span>
                     </div>
                     <div class="simple-info-line">
                       <span class="simple-ip" :class="{ 'with-comment': server.comment }">
@@ -1609,6 +1673,10 @@ onBeforeUnmount(() => {
                             {{ childServer.tag }}
                           </span>
                           <span class="simple-comment" v-if="childServer.comment">{{ childServer.comment }}</span>
+                          <span v-if="childServer.auth_mode" class="auth-mode-badge"
+                                :data-mode="childServer.auth_mode">
+                            {{ getAuthModeLabel(childServer.auth_mode) }}
+                          </span>
                         </div>
                         <div class="simple-info-line">
                           <span class="simple-ip" :class="{ 'with-comment': childServer.comment }">
@@ -1744,6 +1812,21 @@ onBeforeUnmount(() => {
                   <label>服务器注释 (Comment)</label>
                   <input type="text" v-model="currentServerData.comment" placeholder="例如: 生存一区 (S1)" />
                   <p class="form-help-text" style="margin-top: 5px;">用于后台管理备注，或在服务器离线时作为标题显示。</p>
+                </div>
+              </div>
+
+              <div class="form-row">
+                <div class="form-group grow">
+                  <label for="auth-mode-select">登录验证方式 (Auth Mode)</label>
+                  <select id="auth-mode-select" v-model="currentServerData.auth_mode">
+                    <option v-for="option in authModeOptions" :key="option.value || 'auto'"
+                            :value="option.value">
+                      {{ option.label }}
+                    </option>
+                  </select>
+                  <p class="form-help-text">
+                    选择“自动探测”时，机器人会优先继承本群默认值；未设置群默认时再根据在线玩家样本判断。
+                  </p>
                 </div>
               </div>
 
@@ -2413,7 +2496,8 @@ textarea {
 
 .server-item-simple.is-ignored .simple-tag,
 .server-item-simple.is-ignored .simple-comment,
-.server-item-simple.is-ignored .simple-ip {
+.server-item-simple.is-ignored .simple-ip,
+.server-item-simple.is-ignored .auth-mode-badge {
   text-decoration: line-through;
   opacity: 0.7;
 }
@@ -2453,6 +2537,39 @@ textarea {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex-shrink: 1;
+}
+
+.auth-mode-badge {
+  padding: 3px 8px;
+  border-radius: 999px;
+  background: #6e7681;
+  color: #fff;
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.auth-mode-badge[data-mode="official"] {
+  background: #2ea043;
+}
+
+.auth-mode-badge[data-mode="mua"] {
+  background: #5865f2;
+}
+
+.auth-mode-badge[data-mode="yggdrasil"] {
+  background: #00a8b5;
+}
+
+.auth-mode-badge[data-mode="offline"] {
+  background: #db941e;
+  color: #18120c;
+}
+
+.auth-mode-badge[data-mode="mixed"] {
+  background: #a371f7;
 }
 
 .simple-ip {
@@ -2820,7 +2937,8 @@ textarea {
   margin-left: 4px;
 }
 
-.server-form input[type="text"] {
+.server-form input[type="text"],
+.server-form select {
   width: 100%;
   padding: 12px 14px;
   border: 1px solid var(--color-border);
@@ -2834,7 +2952,14 @@ textarea {
   z-index: 1;
 }
 
-.server-form input[type="text"]:focus {
+.server-form select {
+  min-height: 45px;
+  padding-left: 26px;
+  cursor: pointer;
+}
+
+.server-form input[type="text"]:focus,
+.server-form select:focus {
   border-color: var(--color-primary);
   box-shadow: 0 0 0 3px var(--color-focus-outline);
   outline: none;
