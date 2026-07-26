@@ -264,9 +264,9 @@ const addressDisplayModeOptions: Array<{
 ]
 
 const authModeOptions: Array<{ value: AuthMode; label: string; shortLabel: string }> = [
-  { value: 'xdu', label: 'XDUCraft 本校皮肤站登录', shortLabel: 'XDU' },
-  { value: 'mua', label: 'MUA 联合登录（含 XDU）', shortLabel: 'MUA' },
   { value: 'official', label: '正版登录', shortLabel: '正版' },
+  { value: 'mua', label: 'MUA 联合登录（含 XDU）', shortLabel: 'MUA' },
+  { value: 'xdu', label: 'XDUCraft 本校皮肤站登录', shortLabel: 'XDU' },
   { value: 'yggdrasil', label: '第三方外置登录', shortLabel: '外置' },
   { value: 'offline', label: '离线验证', shortLabel: '离线登录' },
   { value: 'mixed', label: '混合验证', shortLabel: '混合' }
