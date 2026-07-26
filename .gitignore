@@ -7,7 +7,11 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# 本项目以 package-lock.json / npm 为准，避免同时提交两套锁文件
+/pnpm-lock.yaml
+
 node_modules
+.playwright-cli/
 .DS_Store
 dist
 dist-ssr
