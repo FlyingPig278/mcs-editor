@@ -265,7 +265,7 @@ const addressDisplayModeOptions: Array<{
 
 const authModeOptions: Array<{ value: AuthMode; label: string; shortLabel: string }> = [
   { value: 'official', label: '正版登录', shortLabel: '正版' },
-  { value: 'mua', label: 'MUA 联合登录（含 XDU）', shortLabel: 'MUA' },
+  { value: 'mua', label: 'MUA 联合登录', shortLabel: 'MUA' },
   { value: 'xdu', label: 'XDUCraft 本校皮肤站登录', shortLabel: 'XDU' },
   { value: 'yggdrasil', label: '第三方外置登录', shortLabel: '外置' },
   { value: 'offline', label: '离线验证', shortLabel: '离线登录' },
@@ -2048,10 +2048,6 @@ onBeforeUnmount(() => {
                   <p class="form-help-text">
                     必填。请按服务器实际配置的认证后端选择；状态协议无法可靠自动判断该信息。
                   </p>
-                  <p v-if="normalizeAuthMode(currentServerData.auth_mode) === 'mua'"
-                     class="auth-mode-guidance">
-                    MUA 是包含 XDUCraft 本校皮肤站的联合认证；玩家可直接使用 XDU 账号登录。
-                  </p>
                 </div>
               </div>
 
@@ -3206,17 +3202,6 @@ textarea {
   margin-top: 8px;
   margin-bottom: 0;
   line-height: 1.4;
-}
-
-.auth-mode-guidance {
-  margin: 10px 0 0;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, #5865f2 45%, var(--color-border));
-  border-radius: 10px;
-  background: color-mix(in srgb, #5865f2 10%, var(--color-surface));
-  color: var(--color-text-primary);
-  font-size: 0.88rem;
-  line-height: 1.5;
 }
 
 .address-display-options {
